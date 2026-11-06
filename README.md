@@ -39,7 +39,18 @@ MyGo Music 0.1.15 and 0.1.16 do not yet hide editing controls for fixed playlist
 
 Open **My Page** from the account menu to see your avatar, signature, publicly created playlists, podcast subscriptions and followed artists. Other listeners' pages show only their publicly created playlists. Private playlists remain available in your own library, not on your profile.
 
+Profiles show a User label above the name, with following/follower counts and the signature below it. Each collection is shown in full on the profile rather than as a six-item preview. Layout, card styles and loading visuals are provided by MyGo Music.
+
 Click a podcast's host name to open their page when NetEase supplies a valid user ID.
+
+Native artist pages show popular songs in NetEase's order and load the full album catalog, rather than stopping at 100 albums. The native artist interface does not currently expose biographies, aliases, latest-song tabs or activity feeds. Supplementary artist browse routes show biographies, aliases, song/album counts and paginated latest songs/albums, but are not linked from the native artist page.
+
+## Interface Alignment
+
+- Home keeps the original section order and independent retry links. Greetings, dates, card artwork and animations come from MyGo Music.
+- Daily recommendations use the same songs and explanation on Home and the standalone page. The plugin supplies a separate card-page title and subtitle where supported; older clients may ignore these optional fields.
+- Playlists preserve service order, creator information, descriptions and available song metadata. The host controls the header and editing UI; play counts, chart-specific headers and an inline Heart Mode button are not exposed by the playlist interface.
+- Personal FM has Recommended, Familiar and Explore modes. Heart Mode starts with a playable liked song, then continues with similar music. The host groups all four as stations: the original separate Heart Mode card and FM trash action cannot be reproduced. The plugin cannot read the current playback queue to prefer the currently playing liked song as its seed, or detect every stop/restart of Heart Mode.
 
 ## How It Plays
 

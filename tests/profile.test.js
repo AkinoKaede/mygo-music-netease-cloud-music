@@ -92,22 +92,26 @@ test("logout during a playlist check prevents the pending mutation", async () =>
   assert.equal(h.calls.length, 2);
 });
 
-// The profile and every continuation must exclude private and saved playlists.
-test("own profile uses native header fields and public-only playlist pagination", async () => {
+// The full profile and legacy continuation routes must exclude private and saved playlists.
+test("own profile uses native header order and keeps all public playlists inline", async () => {
   const publicLists = Array.from({ length: 51 }, (_, i) => playlist(i + 10));
   const lists = [playlist(1, 7, { privacy: 10 }), playlist(2, 8), ...publicLists];
   const h = await harness(call => profileResponse(call, lists), { signedIn: true });
   const page = await h.plugin.browse({ page: "profile" });
   assert.equal(page.imageUrl, "https://image.example/avatar");
-  assert.equal(page.description, person.signature);
+  assert.ok(page.description.endsWith(`\n${person.signature}`));
+  assert.ok(page.description.split("\n")[0].includes(String(person.follows)));
+  assert.ok(page.description.split("\n")[0].includes(String(person.followeds)));
   assert.ok(!page.subtitle.includes(person.signature));
-  assert.deepEqual(page.sections[0].playlists.map(p => p.id), publicLists.slice(0, 6).map(p => String(p.id)));
+  assert.ok(!page.subtitle.includes(String(person.follows)));
+  assert.deepEqual(page.sections[0].playlists.map(p => p.id), publicLists.map(p => String(p.id)));
   assert.equal(page.sections.length, 3);
   assert.deepEqual(page.sections[1].shows, []);
   assert.deepEqual(page.sections[2].artists, []);
   assert.ok(page.sections[1].empty);
   assert.ok(page.sections[2].empty);
-  const first = await h.plugin.browse({ page: page.sections[0].morePage });
+  for (const section of page.sections) assert.equal(section.morePage, undefined);
+  const first = await h.plugin.browse({ page: "profile-playlists?kind=created" });
   assert.deepEqual(first.sections[0].playlists.map(p => p.id), publicLists.slice(0, 50).map(p => String(p.id)));
   const last = await h.plugin.browse({ page: first.sections[1].links[0].page });
   assert.deepEqual(last.sections[0].playlists.map(p => p.id), ["60"]);
@@ -115,6 +119,88 @@ test("own profile uses native header fields and public-only playlist pagination"
   assert.ok(h.calls.every(c => [
     "/api/v1/user/detail/7", "/api/user/playlist", "/api/djradio/get/subed", "/api/artist/sublist",
   ].includes(c.path)));
+});
+
+// Profile collections must include every API page, not just the old six-item preview.
+test("profile fully expands paginated playlists, podcasts and followed artists", async () => {
+  const playlists = Array.from({ length: 205 }, (_, i) => playlist(i + 10));
+  const podcasts = Array.from({ length: 105 }, (_, i) => ({ id: i + 300, name: `Show ${i}` }));
+  const artists = Array.from({ length: 55 }, (_, i) => ({ id: i + 500, name: `Artist ${i}` }));
+  const collections = {
+    "/api/user/playlist": [playlists, "playlist", "more"],
+    "/api/djradio/get/subed": [podcasts, "djRadios", "hasMore"],
+    "/api/artist/sublist": [artists, "data", "hasMore"],
+  };
+  const h = await harness(call => {
+    const collection = collections[call.path];
+    if (!collection) return profileResponse(call);
+    const [items, key, moreKey] = collection;
+    const offset = Number(call.params.offset), end = offset + Number(call.params.limit);
+    return { [key]: items.slice(offset, end), [moreKey]: end < items.length };
+  }, { signedIn: true });
+  const page = await h.plugin.browse({ page: "profile" });
+  assert.deepEqual(page.sections[0].playlists.map(p => p.id), playlists.map(p => String(p.id)));
+  assert.deepEqual(page.sections[1].shows.map(p => p.id), podcasts.map(p => String(p.id)));
+  assert.deepEqual(page.sections[2].artists.map(p => p.id), artists.map(p => String(p.id)));
+  assert.ok(page.sections[1].shows.every(p => p.subscribed));
+  assert.ok(page.sections[2].artists.every(p => p.following));
+  for (const section of page.sections) assert.equal(section.morePage, undefined);
+  for (const [path, offsets] of [
+    ["/api/user/playlist", [0, 200]],
+    ["/api/djradio/get/subed", [0, 100]],
+    ["/api/artist/sublist", [0, 50]],
+  ]) assert.deepEqual(h.calls.filter(c => c.path === path).map(c => Number(c.params.offset)), offsets);
+});
+
+// A contradictory hasMore on an empty page must not keep loading forever.
+test("expanded followed artists stop on an empty continuation", async () => {
+  const h = await harness(call => call.path === "/api/artist/sublist"
+    ? { data: Number(call.params.offset) === 0 ? [{ id: 1 }] : [], hasMore: true }
+    : profileResponse(call), { signedIn: true });
+  const page = await h.plugin.browse({ page: "profile" });
+  assert.deepEqual(page.sections[2].artists.map(a => a.id), ["1"]);
+  assert.equal(h.calls.filter(c => c.path === "/api/artist/sublist").length, 2);
+});
+
+// A failed later page must not pass a truncated artist collection off as complete.
+test("failed artist continuation retries the whole profile without duplicate items", async () => {
+  let fail = true;
+  const h = await harness(call => {
+    if (call.path !== "/api/artist/sublist") return profileResponse(call);
+    if (Number(call.params.offset) === 0) return { data: [{ id: 1 }], hasMore: true };
+    if (fail) throw new Error("offline");
+    return { data: [{ id: 2 }], hasMore: false };
+  }, { signedIn: true });
+  const page = await h.plugin.browse({ page: "profile" });
+  assert.equal(page.sections[2].artists, undefined);
+  const retry = page.sections[2].links[0].page;
+  assert.equal(new URL(retry, "https://plugin.invalid/").pathname, "/profile");
+  fail = false;
+  const recovered = await h.plugin.browse({ page: retry });
+  assert.equal(recovered.sections.length, 3);
+  assert.deepEqual(recovered.sections[2].artists.map(a => a.id), ["1", "2"]);
+});
+
+// Profile counts use the reference client's Chinese units without imposing them on English.
+test("profile formats Chinese count boundaries below the name", async () => {
+  const cases = [
+    [0, "0"], [9999, "9999"], [10000, "1.0\u4e07"], [15600, "1.6\u4e07"],
+    [999999, "100.0\u4e07"], [1000000, "100\u4e07"], [100000000, "1.0\u4ebf"],
+  ];
+  for (const language of ["zh-CN", "en"]) {
+    for (const [value, formatted] of cases) {
+      const h = await harness(call => call.path.startsWith("/api/v1/user/detail/")
+        ? { profile: { nickname: "Listener", follows: value, followeds: value } }
+        : profileResponse(call));
+      h.host.language = () => language;
+      h.host.t = key => key === "Following {following} · Followers {followers}"
+        ? "{following}|{followers}" : key;
+      const page = await h.plugin.browse({ page: "user?id=7" });
+      const expected = language === "zh-CN" ? formatted : String(value);
+      assert.equal(page.description, `${expected}|${expected}`);
+      assert.ok(!page.subtitle.includes("|"));
+    }
+  }
 });
 
 // A public user page must never fetch the current listener's private collections.
@@ -142,7 +228,8 @@ test("empty profile keeps its sections without fabricated header content", async
     ? { profile: { nickname: "Listener" } } : profileResponse(call), { signedIn: true });
   const page = await h.plugin.browse({ page: "profile" });
   assert.equal(page.imageUrl, "");
-  assert.equal(page.description, "");
+  assert.equal(page.description.split("\n").length, 1);
+  assert.ok(page.description.includes("0"));
   for (const section of page.sections) {
     assert.ok(section.empty);
     assert.equal(section.morePage, undefined);
@@ -165,7 +252,7 @@ test("profile section failures lead to fresh working retry pages", async () => {
     const target = section.links[0].page;
     assert.ok(new URL(target, "https://plugin.invalid/").searchParams.has("retry"));
     const recovered = await h.plugin.browse({ page: target });
-    assert.ok(recovered.sections.length);
+    assert.equal(recovered.sections.length, 3);
     assert.equal(recovered.sections[0].links, undefined);
   }
 });
@@ -193,6 +280,33 @@ test("in-flight profile results are rejected after logout or account switch", as
       release();
       await rejected;
     }
+  }
+});
+
+// Logout must stop collection pagination before another request can use the next session.
+test("logout stops profile collection pagination", async () => {
+  for (const [path, response] of [
+    ["/api/user/playlist", { playlist: [playlist(1)], more: true }],
+    ["/api/djradio/get/subed", { djRadios: [{ id: 2 }], hasMore: true }],
+    ["/api/artist/sublist", { data: [{ id: 3 }], hasMore: true }],
+  ]) {
+    let release, started;
+    const ready = new Promise(resolve => { started = resolve; });
+    const h = await harness(async call => {
+      if (call.path === "/api/logout") return {};
+      if (call.path !== path) return profileResponse(call);
+      assert.equal(call.params.offset, "0");
+      started();
+      await new Promise(resolve => { release = resolve; });
+      return response;
+    }, { signedIn: true });
+    const pending = h.plugin.browse({ page: "profile" });
+    const rejected = assert.rejects(pending, /account changed/i);
+    await ready;
+    await h.plugin.signOut();
+    release();
+    await rejected;
+    assert.equal(h.calls.filter(call => call.path === path).length, 1);
   }
 });
 

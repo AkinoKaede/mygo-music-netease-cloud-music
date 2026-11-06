@@ -1,7 +1,7 @@
 {
   "id": "netease-cloud-music",
   "name": "NetEase Cloud Music",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "minAppVersion": "0.1.15",
   "main": "index.js",
   "playback": "stream",

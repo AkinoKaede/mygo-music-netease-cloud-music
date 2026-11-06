@@ -6,6 +6,7 @@ const EAPI_KEY = "e82ckenh8dichen8";
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
 const EAPI_UA = "NeteaseMusic 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)";
 const PAGE = 50;
+const ARTIST_PAGE = 100;
 const LEVELS = ["standard", "higher", "exhigh", "lossless", "hires"];
 const load = (key, fallback) => host.storage.get(key) ?? fallback;
 const save = (key, value) => host.storage.set(key, value);
@@ -295,10 +296,12 @@ function trackIdentity(value) {
   return { audio: song, thread: `R_SO_4_${song}` };
 }
 async function details(ids) {
+  const generation = epoch;
   const out = [];
   for (let i = 0; i < ids.length; i += 400) {
     const batch = ids.slice(i, i + 400).map(id);
     const result = await eapi("/api/v3/song/detail", { c: JSON.stringify(batch.map(n => ({ id: Number(n) }))) });
+    if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
     const privileges = new Map((result.privileges || []).map(p => [String(p.id), p]));
     const tracks = new Map((result.songs || []).map(t => [String(t.id), toTrack(t, privileges.get(String(t.id)))]));
     for (const n of batch) if (tracks.has(n)) out.push(tracks.get(n));
@@ -322,6 +325,11 @@ async function daily() {
   catch { tracks = songs.map(song => toTrack(song)); }
   if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
   return tracks;
+}
+function dailyBlurb() {
+  return load("cookies", {}).MUSIC_U
+    ? tr("Picked for your taste, updated daily at 06:00")
+    : tr("Songs everyone is listening to. Sign in for your own recommendations");
 }
 async function pickedForYou() {
   const generation = epoch;
@@ -364,7 +372,10 @@ export async function home() {
   const sections = [];
   // The host renders the first track section with its native daily recommendation card.
   if (songs.status === "fulfilled" && songs.value.length) {
-    sections.push({ title: tr("Daily Recommendations"), tracks: songs.value });
+    sections.push({ title: tr("Daily Recommendations"), pageTitle: tr("Daily Song Recommendations"),
+      subtitle: dailyBlurb(), tracks: songs.value });
+  } else if (songs.status === "rejected") {
+    sections.push(retrySection(tr("Daily Recommendations"), "daily", songs.reason));
   }
   if (picks.status === "fulfilled" && picks.value.length) {
     sections.push({ title: tr("Picked for You Today"), playlists: picks.value.map(toPlaylist) });
@@ -373,6 +384,8 @@ export async function home() {
   }
   if (rankings.status === "fulfilled" && rankings.value.length) {
     sections.push({ title: tr("Official Charts"), playlists: rankings.value.slice(0, 4), morePage: "charts" });
+  } else if (rankings.status === "rejected") {
+    sections.push(retrySection(tr("Official Charts"), "charts", rankings.reason));
   }
   if (playlists.status === "fulfilled" && playlists.value.length) {
     sections.push({ title: tr("Recommended Playlists"), playlists: playlists.value.map(toPlaylist) });
@@ -409,9 +422,11 @@ export async function suggest({ query }) {
 }
 
 async function userPlaylists(uid) {
+  const generation = epoch;
   const all = [];
   for (let offset = 0; ; offset += 200) {
     const result = await web("/api/user/playlist", { uid: id(uid), limit: 200, offset });
+    if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
     const page = result.playlist || [];
     all.push(...page);
     if (!result.more || !page.length) return all;
@@ -421,8 +436,10 @@ export async function playlists() {
   return (await userPlaylists(requireAccount().id)).map(toPlaylist);
 }
 async function playlistRaw(pid) {
-  const result = await web("/api/v6/playlist/detail", { id: id(pid), n: 1000 });
-  if (!result.playlist) throw fail("unavailable", tr("This playlist is missing or private"));
+  const generation = epoch, target = id(pid);
+  const result = await web("/api/v6/playlist/detail", { id: target, n: 1000 });
+  if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
+  if (String(result.playlist?.id) !== target) throw fail("unavailable", tr("This playlist is missing or private"));
   return result.playlist;
 }
 async function editablePlaylist(pid) {
@@ -435,8 +452,14 @@ async function editablePlaylist(pid) {
   return p;
 }
 export async function playlist({ id: pid }) {
+  const generation = epoch;
   const p = await playlistRaw(pid);
-  const tracks = p.trackIds?.length ? await details(p.trackIds.map(t => t.id)) : await hydrate(p.tracks || []);
+  const original = new Map((p.tracks || []).map(t => [String(t.id), toTrack(t)]));
+  const ids = (p.trackIds?.length ? p.trackIds : p.tracks || []).map(t => String(t.id));
+  const enriched = new Map((await details(ids)).map(t => [t.id, t]));
+  if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
+  // Keep the playlist order and any usable original metadata missing from song detail.
+  const tracks = ids.map(id => enriched.get(id) || original.get(id)).filter(Boolean);
   return { ...toPlaylist(p), tracks };
 }
 async function likedIDs() {
@@ -574,14 +597,61 @@ export async function album({ id: aid }) {
   if (!result.album) throw fail("unavailable", tr("Album not found"));
   return { album: toAlbum(result.album), tracks: await hydrate(result.songs || []) };
 }
-export async function artist({ id: aid }) {
-  const [result, records] = await Promise.all([
-    web(`/api/v1/artist/${id(aid)}`), web(`/api/artist/albums/${id(aid)}`, { limit: 100, offset: 0 }),
-  ]);
-  if (!result.artist) throw fail("unavailable", tr("Artist not found"));
+async function artistDetail(aid) {
+  const generation = epoch;
+  const result = await web(`/api/v1/artist/${aid}`);
+  if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
+  if (String(result.artist?.id) !== aid) throw fail("unavailable", tr("Artist not found"));
+  return result;
+}
+async function artistAlbums(aid, offset = 0, limit = PAGE) {
+  const generation = epoch;
+  const result = await web(`/api/artist/albums/${aid}`, { limit, offset });
+  if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
+  const albums = (result.hotAlbums || []).map(toAlbum);
+  return { albums, more: !!result.more && albums.length > 0 };
+}
+async function allArtistAlbums(aid) {
+  const albums = [];
+  for (let offset = 0; ; offset += ARTIST_PAGE) {
+    const page = await artistAlbums(aid, offset, ARTIST_PAGE);
+    albums.push(...page.albums);
+    if (!page.more) return albums;
+  }
+}
+async function artistLatest(aid, offset) {
+  const generation = epoch;
+  const result = await web("/api/v1/artist/songs", { id: aid, order: "time", limit: ARTIST_PAGE, offset }, "POST");
+  if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
+  const songs = result.songs || [];
+  const tracks = await details(songs.map(t => t.id));
+  if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
+  return { tracks, more: !!result.more && songs.length > 0 };
+}
+function artistBrowseHeader(a) {
+  const aliases = [...new Set([a.trans, ...(a.alias || [])].map(s => s?.trim()).filter(Boolean))];
+  const meta = [
+    aliases.join(" / "),
+    a.musicSize > 0 ? tr("{count} songs", { count: a.musicSize }) : "",
+    a.albumSize > 0 ? tr("{count} albums", { count: a.albumSize }) : "",
+  ].filter(Boolean).join(" · ");
+  return {
+    title: a.name, subtitle: tr("Artist"), imageUrl: toArtist(a).imageUrl,
+    description: [meta, (a.briefDesc || "").trim().replace(/\r?\n/g, " ")].filter(Boolean).join("\n"),
+  };
+}
+export async function artist({ id: value }) {
+  const aid = id(value), generation = epoch;
+  const [result, albums] = await Promise.all([artistDetail(aid), allArtistAlbums(aid)]);
+  if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
+  const songs = result.hotSongs || [];
+  let tracks;
+  try { tracks = await hydrate(songs); }
+  catch { tracks = songs.map(song => toTrack(song)); }
+  if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
   const a = toArtist(result.artist);
   save("lastArtists", [a, ...load("lastArtists", []).filter(x => x.id !== a.id)].slice(0, 20));
-  return { artist: a, tracks: await hydrate(result.hotSongs || []), albums: (records.hotAlbums || []).map(toAlbum) };
+  return { artist: a, tracks, albums };
 }
 export async function followArtist({ id: aid, on }) {
   requireAccount();
@@ -599,15 +669,27 @@ export async function savedAlbums({ offset = 0 } = {}) {
 }
 async function followedArtists(offset = 0) {
   requireAccount();
+  const generation = epoch;
   const result = await web("/api/artist/sublist", { limit: PAGE, offset: offsetOf(offset), total: true });
+  if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
   const artists = (result.data || []).map(artist => ({ ...toArtist(artist), following: true }));
   return { artists, more: !!result.hasMore && artists.length > 0 };
 }
+async function allFollowedArtists() {
+  const all = [];
+  for (let offset = 0; ; offset += PAGE) {
+    const result = await followedArtists(offset);
+    all.push(...result.artists);
+    if (!result.more) return all;
+  }
+}
 export async function shows() {
   requireAccount();
+  const generation = epoch;
   const all = [];
   for (let offset = 0; ; offset += 100) {
     const result = await web("/api/djradio/get/subed", { limit: 100, offset, total: true });
+    if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
     const page = result.djRadios || [];
     all.push(...page.map(s => ({ ...toShow(s), subscribed: true })));
     if (!result.hasMore || !page.length) return all;
@@ -651,26 +733,38 @@ export async function stationNext({ id: station }) {
   const generation = epoch;
   if (station === "heart") {
     let state = heart;
+    let seed;
     if (!state) {
       const p = (await userPlaylists(me.id)).find(p => p.specialType === 5);
       if (!p) throw fail("unavailable", tr("Your liked-songs playlist was not found"));
       const ids = await likedIDs();
+      if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
       if (!ids.length) throw fail("unavailable", tr("Like a few songs before starting Heart mode"));
-      const seed = ids[Math.floor(Math.random() * ids.length)];
-      state = { playlist: String(p.id), start: seed, current: seed };
+      const playable = (await details(ids)).filter(t => !t.unavailable);
+      if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
+      if (!playable.length) throw fail("unavailable", tr("Heart Mode can't start right now. Try again later."));
+      seed = playable[Math.floor(Math.random() * playable.length)];
+      state = { playlist: String(p.id), start: seed.id, current: seed.id };
     }
     const result = await eapi("/api/playmode/intelligence/list", {
       songId: state.current, startMusicId: state.start, playlistId: state.playlist, type: "fromPlayOne", count: 1,
     });
-    const tracks = await hydrate((result.data || []).map(x => x.songInfo).filter(Boolean));
-    if (generation === epoch) heart = { ...state, current: tracks.at(-1)?.id || state.current };
+    if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
+    const more = (await hydrate((result.data || []).map(x => x.songInfo).filter(Boolean)))
+      .filter(t => !t.unavailable && t.id !== seed?.id);
+    if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
+    const tracks = seed ? [seed, ...more] : more;
+    heart = { ...state, current: tracks.at(-1)?.id || state.current };
     rememberStationCover(station, tracks, generation);
     return tracks;
   }
   const mode = station.replace(/^fm:/, "");
   if (!["DEFAULT", "FAMILIAR", "EXPLORE"].includes(mode)) throw fail("unavailable", tr("Unknown station"));
   const result = await eapi("/api/v1/radio/get", { mode, limit: 3 });
-  const tracks = await details((result.data || []).map(t => t.id));
+  if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
+  // The host retries empty/unplayable batches up to three times.
+  const tracks = (await details((result.data || []).map(t => t.id))).filter(t => !t.unavailable);
+  if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
   rememberStationCover(station, tracks, generation);
   return tracks;
 }
@@ -781,9 +875,8 @@ export async function browse({ page }) {
     const tracks = await daily();
     return {
       title: tr("Daily Song Recommendations"),
-      subtitle: accountNow()
-        ? tr("{count} songs · Picked for your taste, updated daily at 06:00", { count: tracks.length })
-        : tr("{count} songs · Songs everyone is listening to. Sign in for your own recommendations", { count: tracks.length }),
+      subtitle: tr("Daily Recommendations"),
+      description: tr("{count} songs · {description}", { count: tracks.length, description: dailyBlurb() }),
       sections: [{ tracks }],
     };
   }
@@ -857,26 +950,34 @@ export async function browse({ page }) {
   }
   if (name === "user") return profilePage(id(q.get("id")));
   if (name === "artist-extra") {
-    const aid = id(q.get("id"));
-    const [result, latest, records] = await Promise.all([
-      web(`/api/v1/artist/${aid}`),
-      web("/api/v1/artist/songs", { id: aid, order: "time", limit: PAGE, offset }, "POST"),
-      web(`/api/artist/albums/${aid}`, { limit: PAGE, offset }),
+    const aid = id(q.get("id")), generation = epoch;
+    const [person, latest, records] = await Promise.allSettled([
+      artistDetail(aid), artistLatest(aid, offset), artistAlbums(aid),
     ]);
-    const a = result.artist || {};
-    return { title: a.name || tr("Artist"), subtitle: a.briefDesc || "", sections: [
-      { title: tr("Latest Songs"), tracks: await details((latest.songs || []).map(t => t.id)),
-        morePage: latest.more ? route("artist-extra", { id: aid, offset: offset + PAGE }) : "" },
-      { title: tr("Albums"), albums: (records.hotAlbums || []).map(toAlbum),
-        morePage: records.more ? route("artist-albums", { id: aid, offset: offset + PAGE }) : "" },
+    if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
+    if (person.status === "rejected") throw person.reason;
+    return { ...artistBrowseHeader(person.value.artist), sections: [
+      latest.status === "fulfilled"
+        ? { title: tr("Latest Songs"), tracks: latest.value.tracks, empty: tr("No songs"),
+          morePage: latest.value.more ? route("artist-latest", { id: aid, offset: offset + ARTIST_PAGE }) : "" }
+        : retrySection(tr("Latest Songs"), route("artist-latest", { id: aid, offset }), latest.reason),
+      records.status === "fulfilled"
+        ? { title: tr("Albums"), albums: records.value.albums, empty: tr("No albums"),
+          morePage: records.value.more ? route("artist-albums", { id: aid, offset: PAGE }) : "" }
+        : retrySection(tr("Albums"), route("artist-albums", { id: aid }), records.reason),
     ] };
   }
-  if (name === "artist-albums") {
-    const aid = id(q.get("id"));
-    const result = await web(`/api/artist/albums/${aid}`, { limit: PAGE, offset });
-    return { title: tr("Artist Albums"), sections: [
-      { albums: (result.hotAlbums || []).map(toAlbum) },
-      ...nextSection(name, { id: aid, offset: offset + PAGE }, result.more && result.hotAlbums?.length),
+  if (name === "artist-latest" || name === "artist-albums") {
+    const aid = id(q.get("id")), generation = epoch;
+    const latest = name === "artist-latest";
+    const [person, result] = await Promise.all([
+      artistDetail(aid), latest ? artistLatest(aid, offset) : artistAlbums(aid, offset),
+    ]);
+    if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
+    return { ...artistBrowseHeader(person.artist), sections: [
+      latest ? { title: tr("Latest Songs"), tracks: result.tracks, empty: tr("No songs") }
+        : { title: tr("Albums"), albums: result.albums, empty: tr("No albums") },
+      ...nextSection(name, { id: aid, offset: offset + (latest ? ARTIST_PAGE : PAGE) }, result.more),
     ] };
   }
   if (name === "hot-comments") {
@@ -894,12 +995,11 @@ function retrySection(title, page, error) {
   const target = `${page}${page.includes("?") ? "&" : "?"}retry=${++retryID}`;
   return { title, links: [{ title: tr("Retry"), subtitle: error.message, page: target }] };
 }
-const PROFILE_PREVIEW = 6;
-function profileCollection(title, key, items, page, empty, more = false) {
-  return {
-    title, [key]: items.slice(0, PROFILE_PREVIEW), empty,
-    ...(items.length > PROFILE_PREVIEW || more ? { morePage: page } : {}),
-  };
+function profileCount(value = 0) {
+  if (host.language() !== "zh-CN") return String(value);
+  if (value >= 1e8) return `${(value / 1e8).toFixed(1)}\u4ebf`;
+  if (value >= 1e4) return `${(value / 1e4).toFixed(value < 1e6 ? 1 : 0)}\u4e07`;
+  return String(value);
 }
 function profilePlaylistGroups(lists, uid) {
   const own = accountNow()?.id === uid;
@@ -934,36 +1034,35 @@ async function profilePage(uid) {
   const [person, lists, subscriptions, artists] = await Promise.allSettled([
     web(`/api/v1/user/detail/${uid}`), userPlaylists(uid),
     own ? shows() : Promise.resolve([]),
-    own ? followedArtists() : Promise.resolve({ artists: [] }),
+    own ? allFollowedArtists() : Promise.resolve([]),
   ]);
   if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
   if (person.status === "rejected") throw person.reason;
   const p = person.value.profile;
   if (!p) throw fail("unavailable", tr("User not found"));
   const sections = [];
-  const playlistPage = kind => route("profile-playlists", { ...(own ? {} : { id: uid }), kind });
+  const retryPage = own ? "profile" : route("user", { id: uid });
   if (lists.status === "fulfilled") {
     const groups = profilePlaylistGroups(lists.value, uid);
-    sections.push(
-      profileCollection(tr("Created Playlists"), "playlists", groups.created, playlistPage("created"), tr("No public playlists")),
-    );
+    sections.push({ title: tr("Created Playlists"), playlists: groups.created, empty: tr("No public playlists") });
   } else {
-    sections.push(
-      retrySection(tr("Created Playlists"), playlistPage("created"), lists.reason),
-    );
+    sections.push(retrySection(tr("Created Playlists"), retryPage, lists.reason));
   }
   if (own) {
     sections.push(subscriptions.status === "fulfilled"
-      ? profileCollection(tr("Subscribed Podcasts"), "shows", subscriptions.value, "subscriptions", tr("No subscribed podcasts yet"))
-      : retrySection(tr("Subscribed Podcasts"), "subscriptions", subscriptions.reason));
+      ? { title: tr("Subscribed Podcasts"), shows: subscriptions.value, empty: tr("No subscribed podcasts yet") }
+      : retrySection(tr("Subscribed Podcasts"), retryPage, subscriptions.reason));
     sections.push(artists.status === "fulfilled"
-      ? profileCollection(tr("Followed Artists"), "artists", artists.value.artists, "following", tr("No followed artists yet"), artists.value.more)
-      : retrySection(tr("Followed Artists"), "following", artists.reason));
+      ? { title: tr("Followed Artists"), artists: artists.value, empty: tr("No followed artists yet") }
+      : retrySection(tr("Followed Artists"), retryPage, artists.reason));
   }
+  // The host places subtitle above the name and description lines below it.
+  const stats = tr("Following {following} · Followers {followers}", {
+    following: profileCount(p.follows || 0), followers: profileCount(p.followeds || 0),
+  });
   return {
-    title: p.nickname, imageUrl: https(p.avatarUrl),
-    subtitle: tr("Following {following} · Followers {followers}", { following: p.follows || 0, followers: p.followeds || 0 }),
-    description: p.signature || "", sections,
+    title: p.nickname, imageUrl: https(p.avatarUrl), subtitle: tr("User"),
+    description: [stats, p.signature].filter(Boolean).join("\n"), sections,
   };
 }
 function artistLink(a) {
