@@ -1,7 +1,7 @@
 {
   "id": "netease-cloud-music",
   "name": "NetEase Cloud Music",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "minAppVersion": "0.1.8",
   "main": "index.js",
   "playback": "stream",
@@ -30,7 +30,7 @@
   ],
   "navigation": [
     {
-      "title": "Discover Music",
+      "title": "For You",
       "builtin": "home",
       "icon": "home"
     },
@@ -40,9 +40,19 @@
       "icon": "calendar"
     },
     {
+      "title": "Personal FM",
+      "builtin": "stations",
+      "icon": "radio"
+    },
+    {
       "title": "Charts",
       "page": "charts",
       "icon": "chart"
+    },
+    {
+      "title": "Podcasts",
+      "page": "podcasts",
+      "icon": "podcast"
     },
     {
       "title": "Liked Songs",
@@ -50,34 +60,9 @@
       "icon": "heart"
     },
     {
-      "title": "Saved Albums",
-      "builtin": "savedAlbums",
-      "icon": "album"
-    },
-    {
-      "title": "Followed Artists",
-      "page": "following",
+      "title": "My Profile",
+      "page": "profile",
       "icon": "artist"
-    },
-    {
-      "title": "Personal FM / Heart Mode",
-      "builtin": "stations",
-      "icon": "radio"
-    },
-    {
-      "title": "Discover Podcasts",
-      "page": "podcasts",
-      "icon": "podcast"
-    },
-    {
-      "title": "Subscribed Podcasts",
-      "builtin": "shows",
-      "icon": "podcast"
-    },
-    {
-      "title": "Recently Played",
-      "page": "recent",
-      "icon": "note"
     },
     {
       "title": "Explore",

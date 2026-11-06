@@ -308,31 +308,59 @@ async function hydrate(songs) {
   return songs.map(t => byID.get(String(t.id)) || toTrack(t));
 }
 async function daily() {
-  requireAccount();
+  const generation = epoch;
   const result = await web("/api/v3/discovery/recommend/songs");
-  return hydrate(result.data?.dailySongs || []);
+  if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
+  const songs = result.data?.dailySongs || [];
+  let tracks;
+  try { tracks = await hydrate(songs); }
+  catch { tracks = songs.map(song => toTrack(song)); }
+  if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
+  return tracks;
 }
 async function featured() {
-  if (accountNow()) return (await web("/api/v1/discovery/recommend/resource")).recommend || [];
   return (await web("/api/personalized/playlist", { limit: 30 })).result || [];
+}
+async function recommended() {
+  requireAccount();
+  return (await web("/api/v1/discovery/recommend/resource")).recommend || [];
+}
+function toChart(playlist) {
+  return {
+    ...toPlaylist(playlist),
+    description: [playlist.updateFrequency, ...(playlist.tracks || []).slice(0, 3).map((track, index) =>
+      `${index + 1}. ${track.first} · ${track.second}`)].filter(Boolean).join("\n"),
+  };
+}
+async function charts() {
+  return ((await web("/api/toplist/detail")).list || []).map(toChart);
 }
 export async function home() {
   const generation = epoch;
+  // Keep personalized and public recommendations separate, as in the original client.
+  const [songs, personal, rankings, playlists] = await Promise.allSettled([
+    daily(), accountNow() ? recommended() : Promise.resolve([]), charts(), featured(),
+  ]);
+  if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
   const sections = [];
-  if (accountNow()) {
-    try { sections.push({ title: tr("Daily Recommendations"), tracks: await daily(), morePage: "daily" }); }
-    catch (error) { sections.push({ title: error.message, links: [{ title: tr("Retry Daily Recommendations"), page: "daily" }] }); }
+  // The host renders the first track section with its native daily recommendation card.
+  if (songs.status === "fulfilled" && songs.value.length) {
+    sections.push({ title: tr("Daily Recommendations"), tracks: songs.value });
   }
-  try { sections.push({ title: tr("Recommended Playlists"), playlists: (await featured()).map(toPlaylist) }); }
-  catch (error) { sections.push({ title: error.message, links: [{ title: tr("Retry Recommended Playlists"), page: "recommended" }] }); }
-  const covers = coverURLs(sections.flatMap(section => [
-    ...(section.tracks || []).map(track => track.album?.imageUrl),
-    ...(section.playlists || []).map(playlist => playlist.imageUrl),
-  ]));
-  if (generation === epoch && covers.length) save("stationFallbacks", covers);
-  sections.push({ title: tr("Made for You"), stations: stationCards() });
-  sections.push({ title: tr("Discover More"), links: discoveryLinks() });
-  return { title: tr("Discover Music"), subtitle: accountNow() ? tr("Hello, {name}", { name: accountNow().name }) : tr("Sign in for daily recommendations and your music library"), sections };
+  if (personal.status === "fulfilled" && personal.value.length) {
+    sections.push({ title: tr("Picked for You Today"), playlists: personal.value.map(toPlaylist) });
+  }
+  if (rankings.status === "fulfilled" && rankings.value.length) {
+    sections.push({ title: tr("Official Charts"), playlists: rankings.value.slice(0, 4), morePage: "charts" });
+  }
+  if (playlists.status === "fulfilled" && playlists.value.length) {
+    sections.push({ title: tr("Recommended Playlists"), playlists: playlists.value.map(toPlaylist) });
+  }
+  if (!sections.length) {
+    const failed = [playlists, rankings, songs, personal].find(result => result.status === "rejected");
+    if (failed) throw failed.reason;
+  }
+  return { title: tr("For You"), sections };
 }
 
 const SEARCH = {
@@ -372,7 +400,9 @@ async function userPlaylists(uid) {
   }
 }
 export async function playlists() {
-  return (await userPlaylists(requireAccount().id)).map(toPlaylist);
+  // The host groups every non-editable playlist under Saved Playlists. Liked songs
+  // have their own native entry, so don't misclassify that protected playlist.
+  return (await userPlaylists(requireAccount().id)).filter(playlist => playlist.specialType !== 5).map(toPlaylist);
 }
 async function playlistRaw(pid) {
   const result = await web("/api/v6/playlist/detail", { id: id(pid), n: 1000 });
@@ -535,6 +565,12 @@ export async function savedAlbums({ offset = 0 } = {}) {
   const result = await web("/api/album/sublist", { limit: PAGE, offset: offsetOf(offset), total: true });
   return { albums: (result.data || []).map(a => ({ ...toAlbum(a), saved: true })), more: !!result.hasMore };
 }
+async function followedArtists(offset = 0) {
+  requireAccount();
+  const result = await web("/api/artist/sublist", { limit: PAGE, offset: offsetOf(offset), total: true });
+  const artists = (result.data || []).map(artist => ({ ...toArtist(artist), following: true }));
+  return { artists, more: !!result.hasMore && artists.length > 0 };
+}
 export async function shows() {
   requireAccount();
   const all = [];
@@ -560,47 +596,17 @@ export async function subscribeShow({ id: sid, on }) {
 function coverURLs(urls) {
   return [...new Set(urls.map(https).filter(url => url.startsWith("https://")))].slice(0, 4);
 }
-function discoveryLinks() {
-  const covers = load("discoveryCovers", {});
-  const fallbacks = load("stationFallbacks", []);
-  const [artistCover] = coverURLs(load("lastArtists", []).map(artist => artist.imageUrl));
-  return [
-    { title: tr("Charts"), subtitle: tr("Trending, rising and new music"), page: "charts", imageUrl: covers.charts },
-    { title: tr("Discover Podcasts"), subtitle: tr("Recommended and popular shows"), page: "podcasts", imageUrl: covers.podcasts },
-    { title: tr("Explore"), subtitle: tr("People, new releases and artist updates"), page: "explore", imageUrl: artistCover },
-  ].map((link, index) => ({
-    ...link,
-    imageUrl: link.imageUrl || (fallbacks.length ? fallbacks[index % fallbacks.length] : ""),
-  }));
-}
-function rememberDiscoveryCover(page, urls, generation) {
-  if (generation !== epoch) return;
-  const [cover] = coverURLs(urls);
-  if (cover) save("discoveryCovers", { ...load("discoveryCovers", {}), [page]: cover });
-}
-function stationCards() {
+export function stations() {
   const covers = load("stationCovers", {});
-  const fallbacks = load("stationFallbacks", []);
   return [
     { id: "fm:DEFAULT", name: tr("Recommended"), description: tr("Music picked for you") },
     { id: "fm:FAMILIAR", name: tr("Familiar"), description: tr("More of the sounds you know") },
     { id: "fm:EXPLORE", name: tr("Explore"), description: tr("Find your next favourite") },
     { id: "heart", name: tr("Heart Mode"), description: tr("Discover more from the songs you love") },
-  ].map((station, index) => ({
+  ].map(station => ({
     ...station,
-    imageUrl: covers[station.id] || (fallbacks.length ? fallbacks[index % fallbacks.length] : ""),
+    imageUrl: covers[station.id] || "",
   }));
-}
-export async function stations() {
-  if (stationCards().every(station => station.imageUrl)) return stationCards();
-  const generation = epoch;
-  let covers = coverURLs(load("recent", []).map(track => track.album?.imageUrl));
-  if (!covers.length) {
-    try { covers = coverURLs((await featured()).map(playlist => playlist.coverImgUrl || playlist.picUrl)); }
-    catch { /* Optional artwork must not prevent the radio from opening. */ }
-  }
-  if (generation === epoch && covers.length) save("stationFallbacks", covers);
-  return stationCards();
 }
 function rememberStationCover(station, tracks, generation) {
   if (generation !== epoch) return;
@@ -734,47 +740,75 @@ export async function stream({ id: value, quality = "standard" }) {
 }
 
 export async function browse({ page }) {
-  const generation = epoch;
   const url = new URL(page, "https://plugin.invalid/");
   const name = url.pathname.slice(1);
   const q = url.searchParams;
   const offset = offsetOf(Number(q.get("offset") || 0));
-  if (name === "daily") return { title: tr("Daily Recommendations"), sections: [{ tracks: await daily() }] };
+  if (name === "daily") {
+    const tracks = await daily();
+    return {
+      title: tr("Daily Song Recommendations"),
+      subtitle: accountNow()
+        ? tr("{count} songs · Picked for your taste, updated daily at 06:00", { count: tracks.length })
+        : tr("{count} songs · Sign in for recommendations picked for you", { count: tracks.length }),
+      sections: [{ tracks }],
+    };
+  }
   if (name === "recommended") return { title: tr("Recommended Playlists"), sections: [{ playlists: (await featured()).map(toPlaylist) }] };
   if (name === "charts") {
-    const result = await web("/api/toplist/detail");
-    rememberDiscoveryCover(name, (result.list || []).map(playlist => playlist.coverImgUrl || playlist.picUrl), generation);
-    return { title: tr("Charts"), sections: [{ playlists: (result.list || []).map(p => ({
-      ...toPlaylist(p), description: [p.updateFrequency, ...(p.tracks || []).map(t => `${t.first} · ${t.second}`)].filter(Boolean).join("\n"),
-    })) }] };
+    const lists = await charts();
+    return { title: tr("Charts"), subtitle: tr("Updated Daily"), sections: [
+      { title: tr("Official Charts"), playlists: lists.slice(0, 4) },
+      ...(lists.length > 4 ? [{ title: tr("All Charts"), playlists: lists.slice(4) }] : []),
+    ] };
   }
   if (name === "recent") return { title: tr("Recently Played"), sections: [{ tracks: await recent() }] };
-  if (name === "following") {
-    requireAccount();
-    const result = await web("/api/artist/sublist", { limit: PAGE, offset, total: true });
-    const artists = (result.data || []).map(a => ({ ...toArtist(a), following: true }));
-    return { title: tr("Followed Artists"), sections: [
-      { artists }, { title: tr("New Releases and Updates"), links: artists.map(artistLink) },
-      ...nextSection(name, { offset: offset + PAGE }, result.hasMore && artists.length),
+  if (name === "saved-albums") {
+    const result = await savedAlbums({ offset });
+    return { title: tr("Saved Albums"), sections: [
+      { albums: result.albums },
+      ...nextSection(name, { offset: offset + PAGE }, result.more && result.albums.length),
     ] };
   }
-  if (name === "podcasts") {
-    const [recommended, hot] = await Promise.all([
-      web("/api/djradio/recommend/v1"), web("/api/djradio/hot/v1", { limit: PAGE, offset }),
-    ]);
-    rememberDiscoveryCover(name, [...(recommended.djRadios || []), ...(hot.djRadios || [])].map(show => show.picUrl), generation);
-    return { title: tr("Discover Podcasts"), sections: [
-      ...(offset ? [] : [{ title: tr("Recommended Podcasts"), shows: (recommended.djRadios || []).map(toShow) }]),
-      { title: tr("Popular Podcasts"), shows: (hot.djRadios || []).map(toShow) },
-      ...nextSection(name, { offset: offset + PAGE }, hot.hasMore && hot.djRadios?.length),
+  if (name === "following") {
+    const result = await followedArtists(offset);
+    return { title: tr("Followed Artists"), sections: [
+      { artists: result.artists }, { title: tr("New Releases and Updates"), links: result.artists.map(artistLink) },
+      ...nextSection(name, { offset: offset + PAGE }, result.more),
     ] };
+  }
+  if (name === "subscriptions") return { title: tr("Subscribed Podcasts"), sections: [{ shows: await shows() }] };
+  if (name === "podcasts") {
+    const generation = epoch;
+    const [subscriptions, picks, hot] = await Promise.allSettled([
+      !offset && accountNow() ? shows() : Promise.resolve([]),
+      !offset ? web("/api/djradio/recommend/v1") : Promise.resolve({}),
+      web("/api/djradio/hot/v1", { limit: PAGE, offset }),
+    ]);
+    if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
+    const sections = [];
+    if (subscriptions.status === "fulfilled" && subscriptions.value.length) {
+      sections.push({ title: tr("Subscribed Podcasts"), shows: subscriptions.value });
+    } else if (subscriptions.status === "rejected") {
+      sections.push(retrySection(tr("Subscribed Podcasts"), "subscriptions", subscriptions.reason));
+    }
+    if (picks.status === "fulfilled" && picks.value.djRadios?.length) {
+      sections.push({ title: tr("Recommended Podcasts"), shows: picks.value.djRadios.map(toShow) });
+    } else if (picks.status === "rejected") {
+      sections.push(retrySection(tr("Recommended Podcasts"), "podcasts", picks.reason));
+    }
+    if (hot.status === "fulfilled") {
+      if (hot.value.djRadios?.length) sections.push({ title: tr("Popular Podcasts"), shows: hot.value.djRadios.map(toShow) });
+      sections.push(...nextSection(name, { offset: offset + PAGE }, hot.value.hasMore && hot.value.djRadios?.length));
+    } else sections.push(retrySection(tr("Popular Podcasts"), route("podcasts", { offset }), hot.reason));
+    return { title: tr("Podcasts"), sections };
   }
   if (name === "explore") {
     const query = host.setting("userQuery") || load("lastQuery", "");
     return { title: tr("Explore"), subtitle: tr("More from NetEase Cloud Music"), sections: [
       { title: tr("People"), links: [
         { title: tr("Find People"), subtitle: query ? tr("Search: {query}", { query }) : tr("Search for music first, or set a people search query in plugin settings"), page: route("users", { query }) },
-        ...(accountNow() ? [{ title: tr("My Profile and Updates"), page: route("user", { id: accountNow().id }) }] : []),
+        ...(accountNow() ? [{ title: tr("My Profile"), imageUrl: accountNow().imageUrl, page: "profile" }] : []),
       ] },
       { title: tr("Recently Viewed or Searched Artists"), links: load("lastArtists", []).map(artistLink) },
       { title: tr("Top Comments"), links: load("recent", []).slice(0, 20).map(t => ({
@@ -792,17 +826,8 @@ export async function browse({ page }) {
       ...nextSection(name, { query, offset: offset + PAGE }, users.length && offset + users.length < result.userprofileCount),
     ] };
   }
-  if (name === "user") {
-    const uid = id(q.get("id"));
-    const [result, lists] = await Promise.all([web(`/api/v1/user/detail/${uid}`), userPlaylists(uid)]);
-    if (!result.profile) throw fail("unavailable", tr("User not found"));
-    const p = result.profile;
-    return { title: p.nickname, subtitle: p.signature || "", sections: [
-      { links: [{ title: tr("Updates"), subtitle: tr("Following {following} · Followers {followers}", { following: p.follows || 0, followers: p.followeds || 0 }), imageUrl: https(p.avatarUrl), page: route("events", { id: uid }) }] },
-      { title: tr("Created Playlists"), playlists: lists.filter(p => String(p.creator?.userId) === uid).map(toPlaylist) },
-      { title: tr("Saved Playlists"), playlists: lists.filter(p => String(p.creator?.userId) !== uid).map(toPlaylist) },
-    ] };
-  }
+  if (name === "profile") return profilePage(requireAccount().id);
+  if (name === "user") return profilePage(id(q.get("id")));
   if (name === "artist-extra") {
     const aid = id(q.get("id"));
     const [result, latest, records] = await Promise.all([
@@ -836,6 +861,52 @@ export async function browse({ page }) {
     })) };
   }
   throw fail("unavailable", tr("Page not found"));
+}
+let retryID = 0;
+function retrySection(title, page, error) {
+  // Browse pages are cached by their full route; retry must request a fresh one.
+  const target = `${page}${page.includes("?") ? "&" : "?"}retry=${++retryID}`;
+  return { title, links: [{ title: tr("Retry"), subtitle: error.message, page: target }] };
+}
+async function profilePage(uid) {
+  const generation = epoch;
+  const own = accountNow()?.id === uid;
+  const [person, lists, subscriptions, artists, albums] = await Promise.allSettled([
+    web(`/api/v1/user/detail/${uid}`), userPlaylists(uid),
+    own ? shows() : Promise.resolve([]),
+    own ? followedArtists() : Promise.resolve({ artists: [] }),
+    own ? savedAlbums() : Promise.resolve({ albums: [] }),
+  ]);
+  if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
+  if (person.status === "rejected") throw person.reason;
+  const p = person.value.profile;
+  if (!p) throw fail("unavailable", tr("User not found"));
+  const sections = [
+    { links: [{ title: tr("Updates"), imageUrl: https(p.avatarUrl), page: route("events", { id: uid }) }] },
+  ];
+  if (lists.status === "fulfilled") {
+    sections.push({ title: tr("Created Playlists"), playlists: lists.value.filter(playlist => String(playlist.creator?.userId) === uid).map(toPlaylist) });
+  } else sections.push(retrySection(tr("Created Playlists"), route("user", { id: uid }), lists.reason));
+  if (own) {
+    sections.push(subscriptions.status === "fulfilled"
+      ? { title: tr("Subscribed Podcasts"), shows: subscriptions.value }
+      : retrySection(tr("Subscribed Podcasts"), "subscriptions", subscriptions.reason));
+    sections.push(artists.status === "fulfilled"
+      ? { title: tr("Followed Artists"), artists: artists.value.artists, morePage: "following" }
+      : retrySection(tr("Followed Artists"), "following", artists.reason));
+    sections.push(albums.status === "fulfilled"
+      ? { title: tr("Saved Albums"), albums: albums.value.albums, morePage: "saved-albums" }
+      : retrySection(tr("Saved Albums"), "saved-albums", albums.reason));
+    sections.push({ title: tr("Recently Played"), tracks: load("recent", []).slice(0, 5), morePage: "recent" });
+  }
+  if (lists.status === "fulfilled") {
+    const saved = lists.value.filter(playlist => String(playlist.creator?.userId) !== uid);
+    if (saved.length) sections.push({ title: tr("Saved Playlists"), playlists: saved.map(toPlaylist) });
+  }
+  return { title: p.nickname, subtitle: [
+    tr("Following {following} · Followers {followers}", { following: p.follows || 0, followers: p.followeds || 0 }),
+    p.signature,
+  ].filter(Boolean).join(" · "), sections };
 }
 function artistLink(a) {
   return { title: a.name, subtitle: tr("Latest Songs / All Albums / Updates"), imageUrl: a.imageUrl, page: route("artist-extra", { id: a.id }) };

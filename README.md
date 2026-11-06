@@ -31,7 +31,9 @@ The session is kept unencrypted in the host's plugin data files, not the system 
 - Comments: read, like and post comments; browse top comments through **Explore**.
 - Not available: video playback, full image galleries and FM dislike/trash actions.
 
-**Explore** also has user profiles and artist updates. **Find People** uses your last music search, or **People Search Query** in the plugin's settings.
+**For You** brings together daily recommendations, personalized playlists, official charts and recommended playlists. **My Profile** has your playlists, podcast subscriptions, followed artists, saved albums and recently played music.
+
+**Explore** has people search and artist updates. **Find People** uses your last music search, or **People Search Query** in the plugin's settings.
 
 ## How It Plays
 
