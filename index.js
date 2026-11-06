@@ -318,17 +318,22 @@ async function daily() {
   if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
   return tracks;
 }
-async function recommendedPlaylists() {
+async function pickedForYou() {
   const generation = epoch;
   // The public "personalized" endpoint is not the listener's daily recommendations.
   // Cookies may already be restored while the host is still loading the profile.
   const signedIn = !!load("cookies", {}).MUSIC_U;
   if (!signedIn && accountNow()) requireAccount();
-  const result = signedIn
-    ? await web("/api/v1/discovery/recommend/resource")
-    : await web("/api/personalized/playlist", { limit: 30 });
+  if (!signedIn) return [];
+  const result = await web("/api/v1/discovery/recommend/resource");
   if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
-  return (signedIn ? result.recommend : result.result) || [];
+  return result.recommend || [];
+}
+async function recommendedPlaylists() {
+  const generation = epoch;
+  const result = await web("/api/personalized/playlist", { limit: 30 });
+  if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
+  return result.result || [];
 }
 function toChart(playlist) {
   return {
@@ -342,26 +347,31 @@ async function charts() {
 }
 export async function home() {
   const generation = epoch;
-  const [songs, rankings, playlists] = await Promise.allSettled([
-    daily(), charts(), recommendedPlaylists(),
+  const [songs, picks, rankings, playlists] = await Promise.allSettled([
+    daily(), pickedForYou(), charts(), recommendedPlaylists(),
   ]);
   if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
+  const results = [songs, picks, rankings, playlists];
+  if (!results.some(result => result.status === "fulfilled" && result.value.length)) {
+    const failed = results.find(result => result.status === "rejected");
+    if (failed) throw failed.reason;
+  }
   const sections = [];
   // The host renders the first track section with its native daily recommendation card.
   if (songs.status === "fulfilled" && songs.value.length) {
     sections.push({ title: tr("Daily Recommendations"), tracks: songs.value });
+  }
+  if (picks.status === "fulfilled" && picks.value.length) {
+    sections.push({ title: tr("Picked for You Today"), playlists: picks.value.map(toPlaylist) });
+  } else if (picks.status === "rejected") {
+    sections.push(retrySection(tr("Picked for You Today"), "picked-for-you", picks.reason));
   }
   if (rankings.status === "fulfilled" && rankings.value.length) {
     sections.push({ title: tr("Official Charts"), playlists: rankings.value.slice(0, 4), morePage: "charts" });
   }
   if (playlists.status === "fulfilled" && playlists.value.length) {
     sections.push({ title: tr("Recommended Playlists"), playlists: playlists.value.map(toPlaylist) });
-  }
-  if (!sections.length) {
-    const failed = [playlists, rankings, songs].find(result => result.status === "rejected");
-    if (failed) throw failed.reason;
-  }
-  if (playlists.status === "rejected") {
+  } else if (playlists.status === "rejected") {
     sections.push(retrySection(tr("Recommended Playlists"), "recommended", playlists.reason));
   }
   return { title: tr("For You"), sections };
@@ -764,6 +774,10 @@ export async function browse({ page }) {
     };
   }
   if (name === "recommended") return { title: tr("Recommended Playlists"), sections: [{ playlists: (await recommendedPlaylists()).map(toPlaylist) }] };
+  if (name === "picked-for-you") {
+    requireAccount();
+    return { title: tr("Picked for You Today"), sections: [{ playlists: (await pickedForYou()).map(toPlaylist) }] };
+  }
   if (name === "charts") {
     const lists = await charts();
     return { title: tr("Charts"), subtitle: tr("Updated Daily"), sections: [
