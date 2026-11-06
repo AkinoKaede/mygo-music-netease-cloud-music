@@ -21,11 +21,6 @@
       "key": "loginMethod",
       "label": "Sign-in Method",
       "help": "Leave empty or use qr for QR sign-in; use web for website sign-in. Sessions are stored in the host's plugin data files, not the system keychain."
-    },
-    {
-      "key": "userQuery",
-      "label": "People Search Query",
-      "help": "Used in Explore > Find People. Leave empty to reuse your last music search. Refresh the page after changing this setting."
     }
   ],
   "navigation": [

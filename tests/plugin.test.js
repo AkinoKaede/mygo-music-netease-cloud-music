@@ -72,7 +72,6 @@ test("search hydrates privileges, preserves order and computes pagination", asyn
   assert.equal(result.tracks[0].unavailable, false);
   assert.equal(result.tracks[0].album.imageUrl, "https://p.example/cover.jpg");
   assert.equal(result.more, true);
-  assert.equal(h.state.get("lastQuery"), "a & b");
 });
 
 // A playlist longer than a detail response must not silently lose its remaining tracks.
@@ -224,20 +223,6 @@ test("signed-out mutations report the signIn error code without requesting the A
     () => h.plugin.stationNext({ id: "heart" }),
     () => h.plugin.subscribeShow({ id: "1", on: true }),
   ]) await assert.rejects(action(), { code: "signIn" });
-});
-
-// Encoding a user query must not let ampersands or hashes change browse routing.
-test("people search links round-trip special characters", async () => {
-  const query = "Alice & Bob #1";
-  const h = await harness(({ params }) => {
-    assert.equal(params.s, query);
-    assert.equal(params.type, "1002");
-    return { result: { userprofiles: [{ userId: 7, nickname: "Person" }], userprofileCount: 1 } };
-  }, { settings: { userQuery: query } });
-  const explore = await h.plugin.browse({ page: "explore" });
-  const target = explore.sections[0].links[0].page;
-  const results = await h.plugin.browse({ page: target });
-  assert.equal(results.sections[0].links[0].page, "user?id=7");
 });
 
 // Manifest permissions stay limited to the API hosts and never request process access.

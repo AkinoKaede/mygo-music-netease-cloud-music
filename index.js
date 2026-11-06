@@ -376,11 +376,10 @@ const SEARCH = {
 };
 export async function search({ query, kind = "tracks", offset = 0 }) {
   const shape = SEARCH[kind];
-  if (!shape) throw fail("unsupported", tr("This search type is not supported. Find people from Explore."));
+  if (!shape) throw fail("unsupported", tr("This search type is not supported."));
   offsetOf(offset);
   query = query.trim();
   if (!query) return { [kind]: [], more: false };
-  save("lastQuery", query);
   const result = (await web("/api/cloudsearch/pc", { s: query, type: shape[0], limit: PAGE, offset, total: true })).result || {};
   const raw = result[shape[1]] || [];
   const items = kind === "tracks" ? await hydrate(raw) : raw.map(shape[3]);
@@ -783,7 +782,7 @@ export async function browse({ page }) {
   if (name === "following") {
     const result = await followedArtists(offset);
     return { title: tr("Followed Artists"), sections: [
-      { artists: result.artists }, { title: tr("New Releases and Updates"), links: result.artists.map(artistLink) },
+      { artists: result.artists }, { title: tr("New Releases"), links: result.artists.map(artistLink) },
       ...nextSection(name, { offset: offset + PAGE }, result.more),
     ] };
   }
@@ -814,26 +813,11 @@ export async function browse({ page }) {
     return { title: tr("Podcasts"), sections };
   }
   if (name === "explore") {
-    const query = host.setting("userQuery") || load("lastQuery", "");
     return { title: tr("Explore"), subtitle: tr("More from NetEase Cloud Music"), sections: [
-      { title: tr("People"), links: [
-        { title: tr("Find People"), subtitle: query ? tr("Search: {query}", { query }) : tr("Search for music first, or set a people search query in plugin settings"), page: route("users", { query }) },
-        ...(accountNow() ? [{ title: tr("My Profile"), imageUrl: accountNow().imageUrl, page: "profile" }] : []),
-      ] },
       { title: tr("Recently Viewed or Searched Artists"), links: load("lastArtists", []).map(artistLink) },
       { title: tr("Top Comments"), links: load("recent", []).slice(0, 20).map(t => ({
         title: t.name, subtitle: tr("Read Top Comments"), imageUrl: t.album?.imageUrl, page: route("hot-comments", { id: t.id }),
       })) },
-    ] };
-  }
-  if (name === "users") {
-    const query = q.get("query") || host.setting("userQuery") || load("lastQuery", "");
-    if (!query) return { title: tr("Find People"), subtitle: tr("Search using the top search bar, then return here; or set a people search query in plugin settings."), sections: [] };
-    const result = (await web("/api/cloudsearch/pc", { s: query, type: 1002, limit: PAGE, offset, total: true })).result || {};
-    const users = result.userprofiles || [];
-    return { title: tr("People: {query}", { query }), sections: [
-      { links: users.map(u => ({ title: u.nickname, subtitle: u.signature || "", imageUrl: https(u.avatarUrl), page: route("user", { id: u.userId }) })) },
-      ...nextSection(name, { query, offset: offset + PAGE }, users.length && offset + users.length < result.userprofileCount),
     ] };
   }
   if (name === "profile") return profilePage(requireAccount().id);
@@ -850,7 +834,6 @@ export async function browse({ page }) {
     ]);
     const a = result.artist || {};
     return { title: a.name || tr("Artist"), subtitle: a.briefDesc || "", sections: [
-      ...(a.accountId ? [{ links: [{ title: tr("Artist Updates"), page: route("events", { id: a.accountId }) }] }] : []),
       { title: tr("Latest Songs"), tracks: await details((latest.songs || []).map(t => t.id)),
         morePage: latest.more ? route("artist-extra", { id: aid, offset: offset + PAGE }) : "" },
       { title: tr("Albums"), albums: (records.hotAlbums || []).map(toAlbum),
@@ -865,7 +848,6 @@ export async function browse({ page }) {
       ...nextSection(name, { id: aid, offset: offset + PAGE }, result.more && result.hotAlbums?.length),
     ] };
   }
-  if (name === "events") return eventsPage(id(q.get("id")), q.get("before") || "-1");
   if (name === "hot-comments") {
     const result = await web(`/api/v1/resource/comments/${trackIdentity(q.get("id")).thread}`, { limit: 1, offset: 0 });
     return { title: tr("Top Comments"), subtitle: tr("Like and post comments from the Now Playing comments panel"), sections: (result.hotComments || []).map(c => ({
@@ -929,9 +911,7 @@ async function profilePage(uid) {
   if (person.status === "rejected") throw person.reason;
   const p = person.value.profile;
   if (!p) throw fail("unavailable", tr("User not found"));
-  const sections = [
-    { links: [{ title: tr("Updates"), imageUrl: https(p.avatarUrl), page: route("events", { id: uid }) }] },
-  ];
+  const sections = [];
   const playlistPage = kind => route("profile-playlists", { ...(own ? {} : { id: uid }), kind });
   if (lists.status === "fulfilled") {
     const groups = profilePlaylistGroups(lists.value, uid);
@@ -967,36 +947,9 @@ async function profilePage(uid) {
   return { title: p.nickname, subtitle: [
     tr("Following {following} · Followers {followers}", { following: p.follows || 0, followers: p.followeds || 0 }),
     p.signature,
-    visible.length === 1 ? tr(own ? "Your library will appear here as you add music" : "No public playlists") : "",
+    visible.length === 0 ? tr(own ? "Your library will appear here as you add music" : "No public playlists") : "",
   ].filter(Boolean).join(" · "), sections: visible };
 }
 function artistLink(a) {
-  return { title: a.name, subtitle: tr("Latest Songs / All Albums / Updates"), imageUrl: a.imageUrl, page: route("artist-extra", { id: a.id }) };
-}
-async function eventsPage(uid, before) {
-  if (!/^-?\d+$/.test(before)) throw new Error(tr("Invalid feed cursor"));
-  const result = await web(`/api/event/get/${uid}`, { time: before, limit: 20, getcounts: true, total: false });
-  const sections = (result.events || []).map(event => {
-    let content = {};
-    try { content = JSON.parse(event.json || "{}"); } catch { /* A malformed event must not hide the feed. */ }
-    let message = content.msg || "";
-    if (content.event) {
-      try {
-        const forwarded = JSON.parse(content.event.json);
-        message += "\n" + tr("Shared from {name}: {message}", { name: content.event.user?.nickname || "", message: forwarded.msg || "" });
-      } catch { /* Forwarded content is optional. */ }
-    }
-    const section = { title: `${event.user?.nickname || ""} · ${date(event.eventTime)}`, links: [{
-      title: message || (content.mv || content.video ? tr("Video update (video playback is not supported)") : tr("Shared Update")),
-      subtitle: tr("{likes} likes · {comments} comments", { likes: event.info?.likedCount || 0, comments: event.info?.commentCount || 0 }),
-      imageUrl: https(event.pics?.[0]?.squareUrl || event.user?.avatarUrl), page: route("user", { id: uid }),
-    }] };
-    if (content.song?.id) section.tracks = [toTrack(content.song)];
-    if (content.album?.id) section.albums = [toAlbum(content.album)];
-    if (content.artist?.id) section.artists = [toArtist(content.artist)];
-    if (content.playlist?.id) section.playlists = [toPlaylist(content.playlist)];
-    return section;
-  });
-  sections.push(...nextSection("events", { id: uid, before: result.lasttime }, result.more && result.events?.length && String(result.lasttime) !== before));
-  return { title: tr("Updates"), subtitle: tr("Text, first image and shared music. Full image layouts require host support."), sections };
+  return { title: a.name, subtitle: tr("Latest Songs / All Albums"), imageUrl: a.imageUrl, page: route("artist-extra", { id: a.id }) };
 }

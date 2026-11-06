@@ -33,7 +33,7 @@ The session is kept unencrypted in the host's plugin data files, not the system 
 
 **For You** brings together daily recommendations, official charts and recommended playlists. Sign in to see playlist recommendations picked for your account. **My Profile** has your playlists, podcast subscriptions, followed artists, saved albums and recently played music.
 
-**Explore** has people search and artist updates. **Find People** uses your last music search, or **People Search Query** in the plugin's settings.
+**Explore** has artists' latest songs, albums and top comments.
 
 ## How It Plays
 
