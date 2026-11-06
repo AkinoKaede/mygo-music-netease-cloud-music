@@ -18,7 +18,10 @@ test("QR sign-in persists a session and logout clears it", async () => {
     }
     if (path === "/api/logout") return Response.json({ code: 200 }, { headers: { "set-cookie": "MUSIC_U=stale" } });
   }, { fastLogin: true });
-  assert.equal((await h.plugin.signIn()).id, "7");
+  const account = await h.plugin.signIn();
+  assert.equal(account.id, "7");
+  assert.equal(account.page, "profile");
+  assert.equal((await h.plugin.account()).page, "profile");
   assert.equal(h.prompts[0].qr, "https://music.163.com/login?codekey=qr-key");
   assert.equal(h.state.get("cookies").MUSIC_U, "confirmed");
   await h.plugin.signOut();

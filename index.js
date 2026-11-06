@@ -170,7 +170,7 @@ export async function account() {
   if (generation !== epoch) return null;
   const p = result.profile;
   if (!p?.userId) { resetSession(); return null; }
-  const me = { id: String(p.userId), name: p.nickname, imageUrl: https(p.avatarUrl) };
+  const me = { id: String(p.userId), name: p.nickname, imageUrl: https(p.avatarUrl), page: "profile" };
   save("account", me);
   return me;
 }
@@ -219,7 +219,7 @@ async function login() {
   active();
   const me = await account();
   if (!me) throw new Error(tr("No valid session received. Try again or choose web sign-in in plugin settings."));
-  host.signInPrompt({ text: tr("Signed in as {name}", { name: me.name }) });
+  host.signInPrompt({ text: tr("Welcome back, {name}", { name: me.name }) });
   return me;
 }
 export async function signOut() {
@@ -262,14 +262,19 @@ function toPlaylist(p) {
     id: String(p.id), name: p.name || "", imageUrl: https(p.coverImgUrl || p.picUrl),
     description: p.description || "", owner: p.creator?.nickname || "",
     trackCount: p.trackCount || 0,
-    mine: !!accountNow() && String(p.creator?.userId) === accountNow().id && p.specialType !== 5,
+    mine: !!accountNow() && String(p.creator?.userId) === accountNow().id,
+    fixed: p.specialType === 5,
     saved: !!p.subscribed,
   };
 }
 function toShow(s) {
+  let publisherPage = "";
+  try {
+    publisherPage = route("user", { id: id(s.dj?.userId) });
+  } catch { /* A missing or invalid publisher ID must not hide the podcast. */ }
   return {
     id: String(s.id), name: s.name, imageUrl: https(s.picUrl),
-    description: s.desc || "", publisher: s.dj?.nickname || "",
+    description: s.desc || "", publisher: s.dj?.nickname || "", publisherPage,
     episodeCount: s.programCount || 0, subscribed: !!s.subed,
   };
 }
@@ -413,14 +418,21 @@ async function userPlaylists(uid) {
   }
 }
 export async function playlists() {
-  // The host groups every non-editable playlist under Saved Playlists. Liked songs
-  // have their own native entry, so don't misclassify that protected playlist.
-  return (await userPlaylists(requireAccount().id)).filter(playlist => playlist.specialType !== 5).map(toPlaylist);
+  return (await userPlaylists(requireAccount().id)).map(toPlaylist);
 }
 async function playlistRaw(pid) {
   const result = await web("/api/v6/playlist/detail", { id: id(pid), n: 1000 });
   if (!result.playlist) throw fail("unavailable", tr("This playlist is missing or private"));
   return result.playlist;
+}
+async function editablePlaylist(pid) {
+  requireAccount();
+  const generation = epoch;
+  const p = await playlistRaw(pid);
+  if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
+  // Released hosts may ignore `fixed`, so protect source-managed lists here too.
+  if (p.specialType === 5) throw fail("unsupported", tr("Use song hearts to change your liked songs"));
+  return p;
 }
 export async function playlist({ id: pid }) {
   const p = await playlistRaw(pid);
@@ -518,16 +530,18 @@ export async function createPlaylist({ name }) {
 export async function renamePlaylist({ id: pid, name }) {
   requireAccount();
   if (!name.trim()) throw new Error(tr("Playlist name cannot be empty"));
+  await editablePlaylist(pid);
   await eapi("/api/playlist/update/name", { id: id(pid), name: name.trim() });
 }
 export async function deletePlaylist({ id: pid }) {
-  requireAccount();
+  await editablePlaylist(pid);
   await eapi("/api/playlist/remove", { ids: JSON.stringify([Number(id(pid))]) });
 }
 async function manipulate(op, pid, trackIds) {
   requireAccount();
   const ids = trackIds.map(n => Number(id(n)));
   if (!ids.length) return;
+  await editablePlaylist(pid);
   const send = items => eapi("/api/playlist/manipulate/tracks",
     { op, pid: id(pid), trackIds: JSON.stringify(items), imme: "true" }, [200, 502, 512]);
   let result = await send(ids);
@@ -538,8 +552,7 @@ async function manipulate(op, pid, trackIds) {
 export function addToPlaylist({ id, trackIds }) { return manipulate("add", id, trackIds); }
 export function removeFromPlaylist({ id, trackIds }) { return manipulate("del", id, trackIds); }
 export async function movePlaylistTrack({ id: pid, from, to }) {
-  requireAccount();
-  const p = await playlistRaw(pid);
+  const p = await editablePlaylist(pid);
   // Never reorder a partial playlist: missing IDs could discard unseen tracks.
   const ids = (p.trackIds || []).map(t => Number(id(t.id)));
   if (ids.length !== p.trackCount) throw new Error(tr("The track list is incomplete. Reordering was cancelled."));
@@ -549,7 +562,7 @@ export async function movePlaylistTrack({ id: pid, from, to }) {
   await eapi("/api/playlist/manipulate/tracks", { pid: id(pid), trackIds: JSON.stringify(ids), op: "update" });
 }
 export async function savePlaylist({ id: pid, on }) {
-  requireAccount();
+  await editablePlaylist(pid);
   await eapi(`/api/playlist/${on ? "subscribe" : "unsubscribe"}`, { id: id(pid) });
 }
 export async function album({ id: aid }) {
@@ -618,10 +631,11 @@ function coverURLs(urls) {
 export function stations() {
   const covers = load("stationCovers", {});
   return [
-    { id: "fm:DEFAULT", name: tr("Recommended"), description: tr("Music picked for you") },
-    { id: "fm:FAMILIAR", name: tr("Familiar"), description: tr("More of the sounds you know") },
-    { id: "fm:EXPLORE", name: tr("Explore"), description: tr("Find your next favourite") },
-    { id: "heart", name: tr("Heart Mode"), description: tr("Discover more from the songs you love") },
+    { id: "fm:DEFAULT", name: tr("Recommended"), description: tr("Music picked for your taste, one song after another") },
+    { id: "fm:FAMILIAR", name: tr("Familiar"), description: tr("Music picked for your taste, one song after another") },
+    { id: "fm:EXPLORE", name: tr("Explore"), description: tr("Music picked for your taste, one song after another") },
+    { id: "heart", name: tr("Heart Mode"),
+      description: tr("Start with the music you love\nDiscover similar music based on the songs you've liked, mixed with your favourites") },
   ].map(station => ({
     ...station,
     imageUrl: covers[station.id] || "",
@@ -769,7 +783,7 @@ export async function browse({ page }) {
       title: tr("Daily Song Recommendations"),
       subtitle: accountNow()
         ? tr("{count} songs · Picked for your taste, updated daily at 06:00", { count: tracks.length })
-        : tr("{count} songs · Sign in for recommendations picked for you", { count: tracks.length }),
+        : tr("{count} songs · Songs everyone is listening to. Sign in for your own recommendations", { count: tracks.length }),
       sections: [{ tracks }],
     };
   }
@@ -796,11 +810,14 @@ export async function browse({ page }) {
   if (name === "following") {
     const result = await followedArtists(offset);
     return { title: tr("Followed Artists"), sections: [
-      { artists: result.artists }, { title: tr("New Releases"), links: result.artists.map(artistLink) },
+      { artists: result.artists, empty: tr("No followed artists yet") },
+      { title: tr("New Releases"), links: result.artists.map(artistLink) },
       ...nextSection(name, { offset: offset + PAGE }, result.more),
     ] };
   }
-  if (name === "subscriptions") return { title: tr("Subscribed Podcasts"), sections: [{ shows: await shows() }] };
+  if (name === "subscriptions") return { title: tr("Subscribed Podcasts"), sections: [
+    { shows: await shows(), empty: tr("No subscribed podcasts yet") },
+  ] };
   if (name === "podcasts") {
     const generation = epoch;
     const [subscriptions, picks, hot] = await Promise.allSettled([
@@ -811,9 +828,9 @@ export async function browse({ page }) {
     if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
     const sections = [];
     if (subscriptions.status === "fulfilled" && subscriptions.value.length) {
-      sections.push({ title: tr("Subscribed Podcasts"), shows: subscriptions.value });
+      sections.push({ title: tr("My Subscriptions"), shows: subscriptions.value });
     } else if (subscriptions.status === "rejected") {
-      sections.push(retrySection(tr("Subscribed Podcasts"), "subscriptions", subscriptions.reason));
+      sections.push(retrySection(tr("My Subscriptions"), "subscriptions", subscriptions.reason));
     }
     if (picks.status === "fulfilled" && picks.value.djRadios?.length) {
       sections.push({ title: tr("Recommended Podcasts"), shows: picks.value.djRadios.map(toShow) });
@@ -878,10 +895,9 @@ function retrySection(title, page, error) {
   return { title, links: [{ title: tr("Retry"), subtitle: error.message, page: target }] };
 }
 const PROFILE_PREVIEW = 6;
-function profileCollection(title, key, items, page, more = false) {
-  if (!items.length) return null;
+function profileCollection(title, key, items, page, empty, more = false) {
   return {
-    title, [key]: items.slice(0, PROFILE_PREVIEW),
+    title, [key]: items.slice(0, PROFILE_PREVIEW), empty,
     ...(items.length > PROFILE_PREVIEW || more ? { morePage: page } : {}),
   };
 }
@@ -889,7 +905,7 @@ function profilePlaylistGroups(lists, uid) {
   const own = accountNow()?.id === uid;
   const visible = own ? lists : lists.filter(playlist => playlist.privacy !== 10);
   return {
-    created: visible.filter(playlist => String(playlist.creator?.userId) === uid).map(toPlaylist),
+    created: visible.filter(playlist => String(playlist.creator?.userId) === uid && playlist.privacy !== 10).map(toPlaylist),
     saved: visible.filter(playlist => String(playlist.creator?.userId) !== uid).map(toPlaylist),
   };
 }
@@ -903,9 +919,10 @@ async function profilePlaylistsPage(uid, kind, offset) {
   return {
     title: tr(kind === "created" ? "Created Playlists" : "Saved Playlists"),
     subtitle: playlists.length ? tr("{count} playlists", { count: playlists.length })
-      : tr(kind === "created" ? "No playlists created yet" : "No saved playlists yet"),
+      : tr(kind === "created" ? "No public playlists" : "No saved playlists yet"),
     sections: [
-      { playlists: playlists.slice(offset, offset + PAGE) },
+      { playlists: playlists.slice(offset, offset + PAGE),
+        empty: tr(kind === "created" ? "No public playlists" : "No saved playlists yet") },
       ...nextSection("profile-playlists", { ...(own ? {} : { id: uid }), kind, offset: offset + PAGE },
         offset + PAGE < playlists.length),
     ],
@@ -914,12 +931,10 @@ async function profilePlaylistsPage(uid, kind, offset) {
 async function profilePage(uid) {
   const generation = epoch;
   const own = accountNow()?.id === uid;
-  const [person, lists, subscriptions, artists, albums, history] = await Promise.allSettled([
+  const [person, lists, subscriptions, artists] = await Promise.allSettled([
     web(`/api/v1/user/detail/${uid}`), userPlaylists(uid),
     own ? shows() : Promise.resolve([]),
     own ? followedArtists() : Promise.resolve({ artists: [] }),
-    own ? savedAlbums() : Promise.resolve({ albums: [] }),
-    own ? recentTracks(6) : Promise.resolve([]),
   ]);
   if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
   if (person.status === "rejected") throw person.reason;
@@ -930,39 +945,26 @@ async function profilePage(uid) {
   if (lists.status === "fulfilled") {
     const groups = profilePlaylistGroups(lists.value, uid);
     sections.push(
-      profileCollection(tr("Created Playlists"), "playlists", groups.created, playlistPage("created")),
-      profileCollection(tr("Saved Playlists"), "playlists", groups.saved, playlistPage("saved")),
+      profileCollection(tr("Created Playlists"), "playlists", groups.created, playlistPage("created"), tr("No public playlists")),
     );
   } else {
     sections.push(
       retrySection(tr("Created Playlists"), playlistPage("created"), lists.reason),
-      retrySection(tr("Saved Playlists"), playlistPage("saved"), lists.reason),
     );
   }
   if (own) {
-    const tracks = history.status === "fulfilled" ? history.value : load("recent", []);
-    if (tracks.length) {
-      sections.push({ title: tr("Recently Played"), tracks: tracks.slice(0, 5),
-        ...(tracks.length > 5 || history.status === "rejected" ? { morePage: "recent" } : {}) });
-    } else if (history.status === "rejected") {
-      sections.push(retrySection(tr("Recently Played"), "recent", history.reason));
-    }
     sections.push(subscriptions.status === "fulfilled"
-      ? profileCollection(tr("Subscribed Podcasts"), "shows", subscriptions.value, "subscriptions")
+      ? profileCollection(tr("Subscribed Podcasts"), "shows", subscriptions.value, "subscriptions", tr("No subscribed podcasts yet"))
       : retrySection(tr("Subscribed Podcasts"), "subscriptions", subscriptions.reason));
     sections.push(artists.status === "fulfilled"
-      ? profileCollection(tr("Followed Artists"), "artists", artists.value.artists, "following", artists.value.more)
+      ? profileCollection(tr("Followed Artists"), "artists", artists.value.artists, "following", tr("No followed artists yet"), artists.value.more)
       : retrySection(tr("Followed Artists"), "following", artists.reason));
-    sections.push(albums.status === "fulfilled"
-      ? profileCollection(tr("Saved Albums"), "albums", albums.value.albums, "saved-albums", albums.value.more)
-      : retrySection(tr("Saved Albums"), "saved-albums", albums.reason));
   }
-  const visible = sections.filter(Boolean);
-  return { title: p.nickname, subtitle: [
-    tr("Following {following} · Followers {followers}", { following: p.follows || 0, followers: p.followeds || 0 }),
-    p.signature,
-    visible.length === 0 ? tr(own ? "Your library will appear here as you add music" : "No public playlists") : "",
-  ].filter(Boolean).join(" · "), sections: visible };
+  return {
+    title: p.nickname, imageUrl: https(p.avatarUrl),
+    subtitle: tr("Following {following} · Followers {followers}", { following: p.follows || 0, followers: p.followeds || 0 }),
+    description: p.signature || "", sections,
+  };
 }
 function artistLink(a) {
   return { title: a.name, subtitle: tr("Latest Songs / All Albums"), imageUrl: a.imageUrl, page: route("artist-extra", { id: a.id }) };

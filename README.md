@@ -4,7 +4,7 @@ Plays NetEase Cloud Music in [MyGo Music](https://github.com/egoist/mygo-music).
 
 ## Install
 
-Requires **MyGo Music 0.1.8 or later**.
+Requires **MyGo Music 0.1.15 or later**.
 
 Install with the deeplink:
 
@@ -28,12 +28,18 @@ The session is kept unencrypted in the host's plugin data files, not the system 
 
 - Signed out: recommended playlists, charts, search, albums, artists, public playlists, podcast discovery, comments and lyrics. Playback depends on the track's availability.
 - Signed in: daily recommendations, your library, playlist editing, likes, saved albums, artist follows, podcast subscriptions, recently played music, Personal FM and Heart Mode.
-- Comments: read, like and post comments; browse top comments through **Explore**.
+- Comments: read, like and post comments.
 - Not available: video playback, full image galleries and FM dislike/trash actions.
 
-**For You** brings together daily recommendations, **Picked for You Today** when signed in, official charts and public recommended playlists. **My Profile** has your playlists, podcast subscriptions, followed artists, saved albums and recently played music.
+The sidebar has **For You**, **Daily Recommendations**, **Personal FM**, **Charts** and **Podcasts**, followed by your own and saved playlists. Your liked-songs playlist appears under **My Playlists**, rather than as a separate navigation item. It can be played but not edited like an ordinary playlist; use song hearts to like or unlike songs.
 
-**Explore** has artists' latest songs, albums and top comments.
+MyGo Music 0.1.15 and 0.1.16 do not yet hide editing controls for fixed playlists. The plugin rejects those operations on the liked-songs playlist. Clients with `Playlist.fixed` support hide the controls as well.
+
+**For You** brings together daily recommendations, **Picked for You Today** when signed in, official charts and public recommended playlists.
+
+Open **My Page** from the account menu to see your avatar, signature, publicly created playlists, podcast subscriptions and followed artists. Other listeners' pages show only their publicly created playlists. Private playlists remain available in your own library, not on your profile.
+
+Click a podcast's host name to open their page when NetEase supplies a valid user ID.
 
 ## How It Plays
 
