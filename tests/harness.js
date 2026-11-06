@@ -20,6 +20,8 @@ export async function harness(handler, { signedIn = false, settings = {}, storag
       remove: k => state.delete(k),
     },
     setting: k => settings[k] || "",
+    language: () => "en",
+    t: text => text,
     crypto: {
       md5: hash,
       aesEcbEncrypt: (key, text) => {

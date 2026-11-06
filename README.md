@@ -4,9 +4,17 @@ Plays NetEase Cloud Music in [MyGo Music](https://github.com/egoist/mygo-music).
 
 ## Install
 
-In **Settings > Plugins > +**, install this folder from your computer. You can also choose **Show Plugins Folder** and place this folder there, with `plugin.json` and `index.js` at its root.
+Requires **MyGo Music 0.1.8 or later**.
 
-No build step, external API server, Node.js installation or process permission is needed to run the plugin.
+Install with the deeplink:
+
+[Install NetEase Cloud Music](mygo-music://install-plugin?repo=AkinoKaede/mygo-music-netease-cloud-music)
+
+Or paste the GitHub URL in **Settings > Plugins > +**:
+
+[https://github.com/AkinoKaede/mygo-music-netease-cloud-music](https://github.com/AkinoKaede/mygo-music-netease-cloud-music)
+
+No extra programs or API server are needed.
 
 To get your library, select NetEase Cloud Music and click **Sign In**.
 
@@ -16,46 +24,28 @@ By default, scan the QR code with the NetEase Cloud Music app and confirm on you
 
 The session is kept unencrypted in the host's plugin data files, not the system keychain. Session cookies are sent only to `music.163.com` and `interfacepc.music.163.com`. Signing out forgets the local session and attempts to end it on NetEase's side.
 
-## Features
+## What Works
 
 - Signed out: recommended playlists, charts, search, albums, artists, public playlists, podcast discovery, comments and lyrics. Playback depends on the track's availability.
-- Signed in: daily recommendations, your playlists and liked songs, saved albums, followed artists, subscribed podcasts and recently played music.
-- Library actions: create, rename and delete playlists; add, remove and reorder songs; save playlists and albums; follow artists; subscribe to podcasts; like songs and episodes.
-- Radio: Personal FM, Familiar, Explore and Heart Mode.
-- Comments: read, like and post comments. Top comments are available through **Explore** for recently played tracks.
-- Extra pages: find people, browse user profiles, see artist releases and read updates. **Find People** uses your last music search, or **People Search Query** in the plugin's settings.
+- Signed in: daily recommendations, your library, playlist editing, likes, saved albums, artist follows, podcast subscriptions, recently played music, Personal FM and Heart Mode.
+- Comments: read, like and post comments; browse top comments through **Explore**.
+- Not available: video playback, full image galleries and FM dislike/trash actions.
 
-The plugin supplies data to MyGo Music's native UI. Playback controls, queues, shuffle, repeat, audio caching, session restore, the notch player and on-device podcast captions are provided by the host.
+**Explore** also has user profiles and artist updates. **Find People** uses your last music search, or **People Search Query** in the plugin's settings.
 
 ## How It Plays
 
-Audio streams directly from NetEase's media servers. The plugin requests complete tracks and rejects trial previews; it does not bypass subscription, purchase or regional restrictions.
+Audio streams directly from NetEase. Subscription, purchase and regional restrictions still apply; trial previews are not played as full tracks.
 
-Leave **Quality Override** empty to follow the player: `standard`, `high` and `lossless` map to NetEase's `standard`, `exhigh` and `lossless`. To request a specific level, enter `standard`, `higher`, `exhigh`, `lossless` or `hires`.
-
-The quality actually served depends on your account and the recording. NetEase may return a lower level. Gain and peak metadata are passed to the host for loudness normalization.
+Leave **Quality Override** empty to follow the player, or enter `standard`, `higher`, `exhigh`, `lossless` or `hires`. The quality served depends on your account and the recording.
 
 ## Lyrics
 
-Uses NetEase's word-timed YRC lyrics and translations when available, with plain LRC as a fallback. Podcast transcription is handled by MyGo Music, not the plugin.
+Word-timed lyrics and translations come from NetEase when available, with line-timed lyrics as a fallback. Podcast transcription is handled by MyGo Music.
 
-## Limitations
+## Language
 
-- Plugin text is English. Chinese source wording is retained in JavaScript comments for a possible future localization pass.
-- The host's plugin API cannot reproduce every interaction from the original client. People search and artist updates use browse pages rather than dedicated tabs.
-- Updates show text, the first image and shared music. Full image galleries, video playback and FM dislike/trash actions are not implemented.
-- Comments from the service, music metadata and other user-generated content retain their original language.
-- Offline protocol and behavior tests pass, but signed-in live API behavior and end-to-end desktop UI have not yet been fully verified.
-
-## Development
-
-Node.js 22 or newer is needed only for tests. There are no npm dependencies to install.
-
-```bash
-npm run check
-```
-
-This checks JavaScript syntax and runs mocked tests for authentication, request encryption, pagination, playlist editing, podcast IDs, stream quality and lyrics. It does not contact NetEase.
+Follows MyGo Music's language setting: English or Simplified Chinese. Music titles, comments and other service content keep their original language.
 
 ## License
 
