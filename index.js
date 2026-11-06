@@ -71,7 +71,7 @@ function resetSession() {
   epoch++;
   likesRevision++;
   likedCache = likedPending = heart = null;
-  for (const key of ["cookies", "account", "recent", "lastArtists"]) host.storage.remove(key);
+  for (const key of ["cookies", "account", "recent", "lastArtists", "stationCovers", "stationFallbacks", "discoveryCovers"]) host.storage.remove(key);
 }
 function cookieHeader(cookies = load("cookies", {})) {
   return Object.entries(cookies).map(([key, value]) => `${key}=${value}`).join("; ");
@@ -317,6 +317,7 @@ async function featured() {
   return (await web("/api/personalized/playlist", { limit: 30 })).result || [];
 }
 export async function home() {
+  const generation = epoch;
   const sections = [];
   if (accountNow()) {
     try { sections.push({ title: tr("Daily Recommendations"), tracks: await daily(), morePage: "daily" }); }
@@ -324,12 +325,13 @@ export async function home() {
   }
   try { sections.push({ title: tr("Recommended Playlists"), playlists: (await featured()).map(toPlaylist) }); }
   catch (error) { sections.push({ title: error.message, links: [{ title: tr("Retry Recommended Playlists"), page: "recommended" }] }); }
-  sections.push({ title: tr("Made for You"), stations: stations() });
-  sections.push({ title: tr("Discover More"), links: [
-    { title: tr("Charts"), subtitle: tr("Trending, rising and new music"), page: "charts" },
-    { title: tr("Discover Podcasts"), subtitle: tr("Recommended and popular shows"), page: "podcasts" },
-    { title: tr("Explore"), subtitle: tr("People, new releases and artist updates"), page: "explore" },
-  ] });
+  const covers = coverURLs(sections.flatMap(section => [
+    ...(section.tracks || []).map(track => track.album?.imageUrl),
+    ...(section.playlists || []).map(playlist => playlist.imageUrl),
+  ]));
+  if (generation === epoch && covers.length) save("stationFallbacks", covers);
+  sections.push({ title: tr("Made for You"), stations: stationCards() });
+  sections.push({ title: tr("Discover More"), links: discoveryLinks() });
   return { title: tr("Discover Music"), subtitle: accountNow() ? tr("Hello, {name}", { name: accountNow().name }) : tr("Sign in for daily recommendations and your music library"), sections };
 }
 
@@ -555,18 +557,60 @@ export async function subscribeShow({ id: sid, on }) {
   requireAccount();
   await eapi(`/api/djradio/${on ? "sub" : "unsub"}`, { id: id(sid) });
 }
-export function stations() {
+function coverURLs(urls) {
+  return [...new Set(urls.map(https).filter(url => url.startsWith("https://")))].slice(0, 4);
+}
+function discoveryLinks() {
+  const covers = load("discoveryCovers", {});
+  const fallbacks = load("stationFallbacks", []);
+  const [artistCover] = coverURLs(load("lastArtists", []).map(artist => artist.imageUrl));
+  return [
+    { title: tr("Charts"), subtitle: tr("Trending, rising and new music"), page: "charts", imageUrl: covers.charts },
+    { title: tr("Discover Podcasts"), subtitle: tr("Recommended and popular shows"), page: "podcasts", imageUrl: covers.podcasts },
+    { title: tr("Explore"), subtitle: tr("People, new releases and artist updates"), page: "explore", imageUrl: artistCover },
+  ].map((link, index) => ({
+    ...link,
+    imageUrl: link.imageUrl || (fallbacks.length ? fallbacks[index % fallbacks.length] : ""),
+  }));
+}
+function rememberDiscoveryCover(page, urls, generation) {
+  if (generation !== epoch) return;
+  const [cover] = coverURLs(urls);
+  if (cover) save("discoveryCovers", { ...load("discoveryCovers", {}), [page]: cover });
+}
+function stationCards() {
+  const covers = load("stationCovers", {});
+  const fallbacks = load("stationFallbacks", []);
   return [
     { id: "fm:DEFAULT", name: tr("Recommended"), description: tr("Music picked for you") },
     { id: "fm:FAMILIAR", name: tr("Familiar"), description: tr("More of the sounds you know") },
     { id: "fm:EXPLORE", name: tr("Explore"), description: tr("Find your next favourite") },
     { id: "heart", name: tr("Heart Mode"), description: tr("Discover more from the songs you love") },
-  ];
+  ].map((station, index) => ({
+    ...station,
+    imageUrl: covers[station.id] || (fallbacks.length ? fallbacks[index % fallbacks.length] : ""),
+  }));
+}
+export async function stations() {
+  if (stationCards().every(station => station.imageUrl)) return stationCards();
+  const generation = epoch;
+  let covers = coverURLs(load("recent", []).map(track => track.album?.imageUrl));
+  if (!covers.length) {
+    try { covers = coverURLs((await featured()).map(playlist => playlist.coverImgUrl || playlist.picUrl)); }
+    catch { /* Optional artwork must not prevent the radio from opening. */ }
+  }
+  if (generation === epoch && covers.length) save("stationFallbacks", covers);
+  return stationCards();
+}
+function rememberStationCover(station, tracks, generation) {
+  if (generation !== epoch) return;
+  const [cover] = coverURLs(tracks.filter(track => !track.unavailable).map(track => track.album?.imageUrl));
+  if (cover) save("stationCovers", { ...load("stationCovers", {}), [station]: cover });
 }
 export async function stationNext({ id: station }) {
   const me = requireAccount();
+  const generation = epoch;
   if (station === "heart") {
-    const generation = epoch;
     let state = heart;
     if (!state) {
       const p = (await userPlaylists(me.id)).find(p => p.specialType === 5);
@@ -581,12 +625,15 @@ export async function stationNext({ id: station }) {
     });
     const tracks = await hydrate((result.data || []).map(x => x.songInfo).filter(Boolean));
     if (generation === epoch) heart = { ...state, current: tracks.at(-1)?.id || state.current };
+    rememberStationCover(station, tracks, generation);
     return tracks;
   }
   const mode = station.replace(/^fm:/, "");
   if (!["DEFAULT", "FAMILIAR", "EXPLORE"].includes(mode)) throw fail("unavailable", tr("Unknown station"));
   const result = await eapi("/api/v1/radio/get", { mode, limit: 3 });
-  return details((result.data || []).map(t => t.id));
+  const tracks = await details((result.data || []).map(t => t.id));
+  rememberStationCover(station, tracks, generation);
+  return tracks;
 }
 function toComment(c) {
   const quote = (c.beReplied || []).map(r => `${r.user?.nickname || ""}: ${r.content || ""}`).join("\n");
@@ -687,6 +734,7 @@ export async function stream({ id: value, quality = "standard" }) {
 }
 
 export async function browse({ page }) {
+  const generation = epoch;
   const url = new URL(page, "https://plugin.invalid/");
   const name = url.pathname.slice(1);
   const q = url.searchParams;
@@ -695,6 +743,7 @@ export async function browse({ page }) {
   if (name === "recommended") return { title: tr("Recommended Playlists"), sections: [{ playlists: (await featured()).map(toPlaylist) }] };
   if (name === "charts") {
     const result = await web("/api/toplist/detail");
+    rememberDiscoveryCover(name, (result.list || []).map(playlist => playlist.coverImgUrl || playlist.picUrl), generation);
     return { title: tr("Charts"), sections: [{ playlists: (result.list || []).map(p => ({
       ...toPlaylist(p), description: [p.updateFrequency, ...(p.tracks || []).map(t => `${t.first} · ${t.second}`)].filter(Boolean).join("\n"),
     })) }] };
@@ -713,6 +762,7 @@ export async function browse({ page }) {
     const [recommended, hot] = await Promise.all([
       web("/api/djradio/recommend/v1"), web("/api/djradio/hot/v1", { limit: PAGE, offset }),
     ]);
+    rememberDiscoveryCover(name, [...(recommended.djRadios || []), ...(hot.djRadios || [])].map(show => show.picUrl), generation);
     return { title: tr("Discover Podcasts"), sections: [
       ...(offset ? [] : [{ title: tr("Recommended Podcasts"), shows: (recommended.djRadios || []).map(toShow) }]),
       { title: tr("Popular Podcasts"), shows: (hot.djRadios || []).map(toShow) },
