@@ -16,6 +16,8 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -30,6 +32,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: git diff --exit-code
+      - name: Read release version
+        id: version
+        run: jq -r '"tag=v" + .version' package.json >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-${{ github.sha }}
@@ -48,16 +53,29 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: .nvmrc
+          fetch-depth: 0
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-${{ github.sha }}
           path: dist/release/
-      # This dependency-free helper can only run in a main workflow_dispatch.
-      # It never edits versions, moves an existing tag or publishes a release.
-      - name: Create or resume draft
-        run: node --experimental-strip-types scripts/release.ts
+      - name: Verify existing tag
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          existing="$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}" 2>/dev/null || true)"
+          if [[ -n "$existing" && "$existing" != "$RELEASE_COMMIT" ]]; then
+            echo "Existing tag points to a different commit" >&2
+            exit 1
+          fi
+      - name: Verify archives
+        working-directory: dist/release
+        run: sha256sum --check ./*.sha256
+      - name: Create draft release for review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          gh release create "$RELEASE_TAG" dist/release/*.zip dist/release/*.sha256 \
+            --draft --generate-notes --target "$RELEASE_COMMIT"

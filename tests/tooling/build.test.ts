@@ -178,4 +178,10 @@ test("workflows are pinned, use pnpm and only the manual draft job can write", a
   }
   assert.ok(release.jobs.build.steps.some((step) => step.run === "pnpm install --frozen-lockfile"));
   assert.ok(release.jobs.draft.steps.every((step) => !step.run?.includes("install")));
+  const commands = release.jobs.draft.steps.map((step) => step.run || "").join("\n");
+  assert.match(commands, /sha256sum --check/);
+  assert.match(commands, /git rev-parse --verify/);
+  assert.match(commands, /gh release create "\$RELEASE_TAG"/);
+  assert.match(commands, /--draft --generate-notes --target "\$RELEASE_COMMIT"/);
+  assert.doesNotMatch(commands, /scripts\/release|gh release (?:edit|delete|upload)/);
 });

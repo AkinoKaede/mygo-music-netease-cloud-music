@@ -70,24 +70,9 @@ export async function packagePlugin() {
     await rm(extracted, { recursive: true, force: true });
   }
   const names = releaseNames(pkg);
-  const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
   await mkdir(output, { recursive: true });
   await writeFile(resolve(output, names.zip), bytes);
   await writeFile(resolve(output, names.checksum), `${sha256(bytes)}  ${names.zip}\n`);
-  await writeFile(
-    resolve(output, "release.json"),
-    JSON.stringify(
-      {
-        ...names,
-        version: pkg.version,
-        minAppVersion: manifest.minAppVersion,
-        sha,
-        digest: sha256(bytes),
-      },
-      null,
-      2,
-    ) + "\n",
-  );
   console.log(`Verified ${names.zip}: ${sha256(bytes)}`);
 }
 
