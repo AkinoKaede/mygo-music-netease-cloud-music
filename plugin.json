@@ -1,15 +1,12 @@
 {
   "id": "netease-cloud-music",
   "name": "NetEase Cloud Music",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "minAppVersion": "0.1.20",
   "main": "index.js",
   "playback": "stream",
   "permissions": {
-    "network": [
-      "music.163.com",
-      "interfacepc.music.163.com"
-    ]
+    "network": ["music.163.com", "interfacepc.music.163.com"]
   },
   "settings": [
     {

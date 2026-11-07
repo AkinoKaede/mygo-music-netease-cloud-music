@@ -1,0 +1,63 @@
+name: Draft Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Queue releases rather than interrupting an upload in progress.
+concurrency:
+  group: draft-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          cache: true
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: git diff --exit-code
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ github.sha }}
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 7
+
+  draft:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ github.sha }}
+          path: dist/release/
+      # This dependency-free helper can only run in a main workflow_dispatch.
+      # It never edits versions, moves an existing tag or publishes a release.
+      - name: Create or resume draft
+        run: node --experimental-strip-types scripts/release.ts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
