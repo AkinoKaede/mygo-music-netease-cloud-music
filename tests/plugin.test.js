@@ -163,6 +163,38 @@ test("streams reject previews and map host quality to NetEase quality", async ()
   assert.equal(result.headers.Cookie, undefined);
 });
 
+test("streams accept the 0.1.19 host formats without forwarding session cookies", async () => {
+  for (const type of ["mp3", "flac", "ogg", "wav", "m4a", "aac"]) {
+    const h = await harness(({ params }) => {
+      assert.equal(params.encodeType, "mp3");
+      return { data: [{ id: 1, url: `http://audio.example/a.${type}`, type: type.toUpperCase(),
+        level: "standard", br: 192000, size: 12345 }] };
+    }, { signedIn: true });
+    const result = await h.plugin.stream({ id: "1" });
+    assert.equal(result.type, type);
+    assert.equal(result.url, `https://audio.example/a.${type}`);
+    assert.equal(result.bitRate, 192000);
+    assert.equal(result.size, 12345);
+    assert.deepEqual(Object.keys(result.headers).sort(), ["Referer", "User-Agent"]);
+    assert.equal(result.headers.Referer, "https://music.163.com/");
+  }
+});
+
+test("new stream formats still reject previews, unsafe URLs and unsupported types", async () => {
+  for (const type of ["wav", "m4a", "aac"]) {
+    for (const item of [
+      { url: `https://audio.example/a.${type}`, freeTrialInfo: { start: 0, end: 30 } },
+      { url: "file:///tmp/audio" },
+      { url: "" },
+    ]) {
+      const h = await harness(() => ({ data: [{ id: 1, type, ...item }] }));
+      await assert.rejects(h.plugin.stream({ id: "1" }), { code: "unavailable" });
+    }
+  }
+  const h = await harness(() => ({ data: [{ id: 1, url: "https://audio.example/a.wma", type: "wma" }] }));
+  await assert.rejects(h.plugin.stream({ id: "1" }), { code: "unsupported" });
+});
+
 // Word timestamps are absolute milliseconds; translation alignment tolerates small timing differences.
 test("YRC retains word timing, parentheses and nearby translations", async () => {
   const h = await harness(({ path }) => path.endsWith("/lyric") ? {
@@ -217,6 +249,83 @@ test("like invalidates an older in-flight liked list", async () => {
   assert.deepEqual(await h.plugin.isLiked({ ids: ["1"] }), { 1: true });
 });
 
+test("liked first-page refresh bypasses cached IDs while pagination and hearts reuse them", async () => {
+  let ids = [1];
+  const h = await harness(({ path, params }) => {
+    if (path === "/api/song/like/get") return { ids };
+    if (path === "/api/v3/song/detail") return songDetails(params);
+  }, { signedIn: true });
+  assert.deepEqual(await h.plugin.isLiked({ ids: ["1", "2"] }), { 1: true, 2: false });
+  ids = Array.from({ length: 51 }, (_, i) => i + 2);
+  const first = await h.plugin.liked();
+  assert.deepEqual(first.tracks.map(t => t.id), ids.slice(0, 50).map(String));
+  assert.equal(first.more, true);
+  const next = await h.plugin.liked({ offset: 50 });
+  assert.deepEqual(next.tracks.map(t => t.id), ["52"]);
+  assert.equal(next.more, false);
+  assert.deepEqual(await h.plugin.isLiked({ ids: ["1", "2"] }), { 1: false, 2: true });
+  assert.equal(h.calls.filter(c => c.path === "/api/song/like/get").length, 2);
+  ids = [];
+  assert.deepEqual(await h.plugin.liked({ offset: 0 }), { tracks: [], more: false });
+  assert.deepEqual(await h.plugin.isLiked({ ids: ["2"] }), { 2: false });
+  assert.equal(h.calls.filter(c => c.path === "/api/song/like/get").length, 3);
+});
+
+test("concurrent liked refreshes and hearts share the fresh request instead of old cached IDs", async () => {
+  let release, started, reads = 0;
+  const ready = new Promise(resolve => { started = resolve; });
+  const h = await harness(async ({ path, params }) => {
+    if (path === "/api/v3/song/detail") return songDetails(params);
+    if (path === "/api/song/like/get") {
+      if (++reads === 1) return { ids: [1] };
+      started();
+      await new Promise(resolve => { release = resolve; });
+      return { ids: [2] };
+    }
+  }, { signedIn: true });
+  await h.plugin.isLiked({ ids: ["1"] });
+  const first = h.plugin.liked();
+  await ready;
+  const second = h.plugin.liked();
+  const hearts = h.plugin.isLiked({ ids: ["1", "2"] });
+  release();
+  assert.deepEqual((await first).tracks.map(t => t.id), ["2"]);
+  assert.deepEqual((await second).tracks.map(t => t.id), ["2"]);
+  assert.deepEqual(await hearts, { 1: false, 2: true });
+  assert.equal(reads, 2);
+});
+
+test("a failed liked refresh is reported and can be retried", async () => {
+  let reads = 0;
+  const h = await harness(({ path, params }) => {
+    if (path === "/api/v3/song/detail") return songDetails(params);
+    if (++reads === 1) return { ids: [1] };
+    if (reads === 2) throw new Error("offline");
+    return { ids: [2] };
+  }, { signedIn: true });
+  await h.plugin.liked();
+  await assert.rejects(h.plugin.liked(), /offline/);
+  assert.deepEqual((await h.plugin.liked()).tracks.map(t => t.id), ["2"]);
+});
+
+test("logout during a liked refresh prevents hydration with the old account's IDs", async () => {
+  let release, started;
+  const ready = new Promise(resolve => { started = resolve; });
+  const h = await harness(async ({ path }) => {
+    if (path === "/api/logout") return {};
+    assert.equal(path, "/api/song/like/get");
+    started();
+    await new Promise(resolve => { release = resolve; });
+    return { ids: [1] };
+  }, { signedIn: true });
+  const pending = h.plugin.liked();
+  await ready;
+  await h.plugin.signOut();
+  release();
+  await assert.rejects(pending, /account changed/);
+  assert.equal(h.calls.some(c => c.path === "/api/v3/song/detail"), false);
+});
+
 // Guest actions need the host's sign-in flow, not a misleading successful mutation.
 test("signed-out mutations report the signIn error code without requesting the API", async () => {
   const h = await harness(() => assert.fail("Unexpected network request"));
@@ -231,7 +340,12 @@ test("signed-out mutations report the signIn error code without requesting the A
 // Manifest permissions stay limited to the API hosts and never request process access.
 test("manifest loads a portable entry with only required network permissions", async () => {
   const manifest = JSON.parse(await readFile(new URL("../plugin.json", import.meta.url)));
+  const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url)));
+  assert.equal(manifest.version, pkg.version);
+  assert.equal(manifest.minAppVersion, "0.1.19");
   assert.deepEqual(manifest.permissions.network, ["music.163.com", "interfacepc.music.163.com"]);
   assert.equal(manifest.permissions.process, undefined);
   assert.equal(manifest.main, "index.js");
+  assert.equal(manifest.imageSizes, undefined);
+  assert.equal(manifest.requestHeaders, undefined);
 });

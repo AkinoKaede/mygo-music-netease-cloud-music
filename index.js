@@ -447,7 +447,7 @@ async function editablePlaylist(pid) {
   const generation = epoch;
   const p = await playlistRaw(pid);
   if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
-  // Released hosts may ignore `fixed`, so protect source-managed lists here too.
+  // Protect source-managed lists even when a caller bypasses the host's fixed controls.
   if (p.specialType === 5) throw fail("unsupported", tr("Use song hearts to change your liked songs"));
   return p;
 }
@@ -462,15 +462,16 @@ export async function playlist({ id: pid }) {
   const tracks = ids.map(id => enriched.get(id) || original.get(id)).filter(Boolean);
   return { ...toPlaylist(p), tracks };
 }
-async function likedIDs() {
+async function likedIDs(refresh = false) {
   const me = requireAccount();
-  if (likedCache && Date.now() - likedCache.time < 60000) return likedCache.ids;
+  if (!likedPending && !refresh && likedCache && Date.now() - likedCache.time < 60000) return likedCache.ids;
   if (!likedPending) {
     const generation = epoch;
     const revision = likesRevision;
     const pending = eapi("/api/song/like/get", { uid: me.id }).then(result => {
+      if (generation !== epoch) throw new Error(tr("The account changed. Reload this page."));
       const ids = (result.ids || []).map(String);
-      if (generation === epoch && revision === likesRevision) likedCache = { time: Date.now(), ids };
+      if (revision === likesRevision) likedCache = { time: Date.now(), ids };
       return ids;
     }).finally(() => { if (likedPending === pending) likedPending = null; });
     likedPending = pending;
@@ -479,7 +480,8 @@ async function likedIDs() {
 }
 export async function liked({ offset = 0 } = {}) {
   offsetOf(offset);
-  const ids = await likedIDs();
+  // A first-page request is also the host's refresh after changes in the service.
+  const ids = await likedIDs(offset === 0);
   return { tracks: await details(ids.slice(offset, offset + PAGE)), more: offset + PAGE < ids.length };
 }
 export async function isLiked({ ids }) {
@@ -856,7 +858,7 @@ export async function stream({ id: value, quality = "standard" }) {
   const item = (result.data || []).find(t => String(t.id) === identity.audio) || result.data?.[0];
   if (!item?.url || item.freeTrialInfo != null) throw fail("unavailable", tr("Full playback is unavailable. A subscription or purchase may be required."));
   const type = (item.type || (["lossless", "hires"].includes(item.level) ? "flac" : "mp3")).toLowerCase();
-  if (!["mp3", "flac", "ogg"].includes(type)) throw fail("unsupported", tr("Unsupported audio format: {type}", { type }));
+  if (!["mp3", "flac", "ogg", "wav", "m4a", "aac"].includes(type)) throw fail("unsupported", tr("Unsupported audio format: {type}", { type }));
   const url = new URL(https(item.url));
   if (url.protocol !== "https:") throw fail("unavailable", tr("The audio URL is not a secure network address"));
   return {

@@ -4,7 +4,7 @@ Plays NetEase Cloud Music in [MyGo Music](https://github.com/egoist/mygo-music).
 
 ## Install
 
-Requires **MyGo Music 0.1.15 or later**.
+Requires **MyGo Music 0.1.19 or later**.
 
 Install with the deeplink:
 
@@ -33,7 +33,9 @@ The session is kept unencrypted in the host's plugin data files, not the system 
 
 The sidebar has **For You**, **Daily Recommendations**, **Personal FM**, **Charts** and **Podcasts**, followed by your own and saved playlists. Your liked-songs playlist appears under **My Playlists**, rather than as a separate navigation item. It can be played but not edited like an ordinary playlist; use song hearts to like or unlike songs.
 
-MyGo Music 0.1.15 and 0.1.16 do not yet hide editing controls for fixed playlists. The plugin rejects those operations on the liked-songs playlist. Clients with `Playlist.fixed` support hide the controls as well.
+MyGo Music hides editing controls for the fixed liked-songs playlist. The plugin also rejects those operations; use song hearts instead.
+
+When MyGo Music refreshes the first page of liked songs, the plugin fetches fresh IDs instead of reusing its local cache. Pagination and song hearts share the refreshed list.
 
 **For You** brings together daily recommendations, **Picked for You Today** when signed in, official charts and public recommended playlists.
 
@@ -48,13 +50,15 @@ Native artist pages show popular songs in NetEase's order and load the full albu
 ## Interface Alignment
 
 - Home keeps the original section order and independent retry links. Greetings, dates, card artwork and animations come from MyGo Music.
-- Daily recommendations use the same songs and explanation on Home and the standalone page. The plugin supplies a separate card-page title and subtitle where supported; older clients may ignore these optional fields.
+- Daily recommendations use the same songs and explanation on Home and the standalone page. The plugin supplies the card-page title and subtitle supported since MyGo Music 0.1.17.
 - Playlists preserve service order, creator information, descriptions and available song metadata. The host controls the header and editing UI; play counts, chart-specific headers and an inline Heart Mode button are not exposed by the playlist interface.
 - Personal FM has Recommended, Familiar and Explore modes. Heart Mode starts with a playable liked song, then continues with similar music. The host groups all four as stations: the original separate Heart Mode card and FM trash action cannot be reproduced. The plugin cannot read the current playback queue to prefer the currently playing liked song as its seed, or detect every stop/restart of Heart Mode.
 
 ## How It Plays
 
 Audio streams directly from NetEase. Subscription, purchase and regional restrictions still apply; trial previews are not played as full tracks.
+
+The plugin accepts the host's MP3, FLAC, OGG, WAV, M4A and AAC stream types. Requests still prefer MP3 or FLAC according to quality; accepting more formats does not change what NetEase makes available. M4A decoding depends on the codec inside it (ALAC or AAC-LC); HE-AAC is not supported by MyGo Music 0.1.19.
 
 Leave **Quality Override** empty to follow the player, or enter `standard`, `higher`, `exhigh`, `lossless` or `hires`. The quality served depends on your account and the recording.
 
