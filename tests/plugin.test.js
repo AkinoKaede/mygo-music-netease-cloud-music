@@ -349,3 +349,25 @@ test("manifest loads a portable entry with only required network permissions", a
   assert.equal(manifest.imageSizes, undefined);
   assert.equal(manifest.requestHeaders, undefined);
 });
+
+// Covers on the image CDN must leave their size to the app, which fills in
+// {size} for each place it shows them, replacing any size the API gave.
+test("CDN covers ask the app for their size", async () => {
+  const cdn = (id, picUrl) => song(id, { al: { id: 20 + id, name: "Album", picUrl } });
+  const h = await harness(({ path }) => {
+    if (path === "/api/cloudsearch/pc") return { result: { songs: [song(1), song(2), song(3)], songCount: 3 } };
+    if (path === "/api/v3/song/detail") {
+      return { songs: [
+        cdn(1, "http://p1.music.126.net/abc==/109951.jpg"),
+        cdn(2, "https://p2.music.126.net/def==/109952.jpg?param=130y130"),
+        cdn(3, "http://p.example/cover.jpg"),
+      ], privileges: [] };
+    }
+  });
+  const result = await h.plugin.search({ query: "a", kind: "tracks", offset: 0 });
+  assert.deepEqual(result.tracks.map(t => t.album.imageUrl), [
+    "https://p1.music.126.net/abc==/109951.jpg?param={size}y{size}",
+    "https://p2.music.126.net/def==/109952.jpg?param={size}y{size}",
+    "https://p.example/cover.jpg",
+  ]);
+});

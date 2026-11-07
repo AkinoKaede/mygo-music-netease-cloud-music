@@ -52,6 +52,22 @@ function offsetOf(value = 0) {
 function https(value = "") {
   return String(value || "").replace(/^http:\/\//, "https://");
 }
+// Pictures on the image CDN come at the size MyGo Music shows them: it fills in
+// {size} (0.1.20 and later) for each place, instead of fetching and decoding a
+// cover thousands of pixels across for a 40-pixel row.
+function picture(value = "") {
+  const url = https(value);
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  if (!/(^|\.)music\.126\.net$/.test(parsed.hostname)) return url;
+  parsed.searchParams.delete("param");
+  const query = parsed.search ? `${parsed.search.slice(1)}&` : "";
+  return `${parsed.origin}${parsed.pathname}?${query}param={size}y{size}`;
+}
 function date(value) {
   return value > 0 ? new Date(value).toISOString().slice(0, 10) : "";
 }
@@ -171,7 +187,7 @@ export async function account() {
   if (generation !== epoch) return null;
   const p = result.profile;
   if (!p?.userId) { resetSession(); return null; }
-  const me = { id: String(p.userId), name: p.nickname, imageUrl: https(p.avatarUrl), page: "profile" };
+  const me = { id: String(p.userId), name: p.nickname, imageUrl: picture(p.avatarUrl), page: "profile" };
   save("account", me);
   return me;
 }
@@ -241,11 +257,11 @@ export function setSetting({ key, value }) {
 
 function toArtist(a = {}) {
   return { id: a.id ? String(a.id) : "", name: a.name || "",
-    imageUrl: https(a.img1v1Url || a.picUrl), following: !!a.followed };
+    imageUrl: picture(a.img1v1Url || a.picUrl), following: !!a.followed };
 }
 function toAlbum(a = {}) {
   return {
-    id: a.id ? String(a.id) : "", name: a.name || "", imageUrl: https(a.picUrl),
+    id: a.id ? String(a.id) : "", name: a.name || "", imageUrl: picture(a.picUrl),
     artists: (a.artists || (a.artist ? [a.artist] : [])).map(toArtist),
     released: date(a.publishTime), saved: !!(a.isSub || a.subscribed),
   };
@@ -260,7 +276,7 @@ function toTrack(t, privilege = t.privilege) {
 }
 function toPlaylist(p) {
   return {
-    id: String(p.id), name: p.name || "", imageUrl: https(p.coverImgUrl || p.picUrl),
+    id: String(p.id), name: p.name || "", imageUrl: picture(p.coverImgUrl || p.picUrl),
     description: p.description || "", owner: p.creator?.nickname || "",
     trackCount: p.trackCount || 0,
     mine: !!accountNow() && String(p.creator?.userId) === accountNow().id,
@@ -274,7 +290,7 @@ function toShow(s) {
     publisherPage = route("user", { id: id(s.dj?.userId) });
   } catch { /* A missing or invalid publisher ID must not hide the podcast. */ }
   return {
-    id: String(s.id), name: s.name, imageUrl: https(s.picUrl),
+    id: String(s.id), name: s.name, imageUrl: picture(s.picUrl),
     description: s.desc || "", publisher: s.dj?.nickname || "", publisherPage,
     episodeCount: s.programCount || 0, subscribed: !!s.subed,
   };
@@ -283,7 +299,7 @@ function toEpisode(p, show) {
   return {
     id: `program:${id(p.id)}:${id(p.mainSong.id)}`, name: p.name,
     artists: show.dj?.nickname ? [{ id: "", name: show.dj.nickname }] : [],
-    album: { id: `show:${show.id}`, name: show.name, imageUrl: https(p.coverUrl || show.picUrl) },
+    album: { id: `show:${show.id}`, name: show.name, imageUrl: picture(p.coverUrl || show.picUrl) },
     duration: p.duration || p.mainSong.duration || 0, showId: String(show.id),
     description: p.description || "", published: date(p.createTime),
     url: `${SITE}/program?id=${p.id}`,
@@ -773,7 +789,7 @@ export async function stationNext({ id: station }) {
 function toComment(c) {
   const quote = (c.beReplied || []).map(r => `${r.user?.nickname || ""}: ${r.content || ""}`).join("\n");
   return {
-    id: String(c.commentId), author: c.user?.nickname || "", avatarUrl: https(c.user?.avatarUrl),
+    id: String(c.commentId), author: c.user?.nickname || "", avatarUrl: picture(c.user?.avatarUrl),
     text: c.content + (quote ? "\n\n" + tr("Replying to: {quote}", { quote }) : ""), time: c.time || 0,
     likes: c.likedCount || 0, liked: !!c.liked,
   };
@@ -986,7 +1002,7 @@ export async function browse({ page }) {
     const result = await web(`/api/v1/resource/comments/${trackIdentity(q.get("id")).thread}`, { limit: 1, offset: 0 });
     return { title: tr("Top Comments"), subtitle: tr("Like and post comments from the Now Playing comments panel"), sections: (result.hotComments || []).map(c => ({
       title: tr("{name} · {likes} likes", { name: c.user?.nickname || tr("Listener"), likes: c.likedCount || 0 }) ,
-      links: [{ title: c.content, subtitle: date(c.time), imageUrl: https(c.user?.avatarUrl), page: route("user", { id: c.user.userId }) }],
+      links: [{ title: c.content, subtitle: date(c.time), imageUrl: picture(c.user?.avatarUrl), page: route("user", { id: c.user.userId }) }],
     })) };
   }
   throw fail("unavailable", tr("Page not found"));
@@ -1063,7 +1079,7 @@ async function profilePage(uid) {
     following: profileCount(p.follows || 0), followers: profileCount(p.followeds || 0),
   });
   return {
-    title: p.nickname, imageUrl: https(p.avatarUrl), subtitle: tr("User"),
+    title: p.nickname, imageUrl: picture(p.avatarUrl), subtitle: tr("User"),
     description: [stats, p.signature].filter(Boolean).join("\n"), sections,
   };
 }
