@@ -4,7 +4,7 @@ Plays NetEase Cloud Music in [MyGo Music](https://github.com/egoist/mygo-music).
 
 ## Install
 
-Requires **MyGo Music 0.1.19 or later**.
+Requires **MyGo Music 0.1.20 or later**, which fills in the size of each cover and avatar as it shows them.
 
 Install with the deeplink:
 
