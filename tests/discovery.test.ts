@@ -14,6 +14,24 @@ function discovery({ path, params }: Call) {
   if (path === "/api/personalized/playlist") return { result: [{ id: 40 }] };
 }
 
+// Podcast discovery keeps its first batch without offering unsupported append pagination.
+test("podcasts omit pagination even when more popular shows are available", async () => {
+  const h = await harness(({ path }) => {
+    if (path === "/api/djradio/recommend/v1") return { djRadios: [{ id: 10 }] };
+    if (path === "/api/djradio/hot/v1") return { djRadios: [{ id: 20 }], hasMore: true };
+  });
+  const page = await h.plugin.browse({ page: "podcasts" });
+  assert.deepEqual(
+    page.sections.flatMap((s) => (s.shows || []).map((p) => p.id)),
+    ["10", "20"],
+  );
+  for (const section of page.sections) {
+    assert.ok(!section.links?.length);
+    assert.ok(!section.morePage);
+  }
+  assert.equal(h.calls.filter((c) => c.path === "/api/djradio/hot/v1").length, 1);
+});
+
 // Personalized playlist picks and public recommendations must remain distinct and in reference order.
 test("home distinguishes daily songs, personal picks, official charts and public playlists", async () => {
   const h = await harness(discovery, { signedIn: true });

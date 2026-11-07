@@ -91,7 +91,7 @@
   "Quality Override": "音质覆盖",
   "Sign-in Method": "登录方式",
   "Leave empty to follow the player. Options: standard / higher / exhigh / lossless / hires. Your account must have access to the requested quality.": "留空跟随播放器。可填 standard / higher / exhigh / lossless / hires；需要账号具备相应权限。",
-  "Leave empty or use qr for QR sign-in; use web for website sign-in. Sessions are stored in the host's plugin data files, not the system keychain.": "留空或 qr 使用扫码登录；填 web 使用网易云网页登录。登录态保存在宿主的插件数据文件中，不是系统钥匙串。",
+  "Leave empty or use qr for QR sign-in; use web for website sign-in.": "留空或 qr 使用扫码登录；填 web 使用网易云网页登录。",
   "Liked Songs": "我喜欢的音乐",
   "Saved Albums": "收藏专辑",
   "Subscribed Podcasts": "订阅的播客",

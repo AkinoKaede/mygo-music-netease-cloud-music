@@ -125,15 +125,9 @@ export async function browse({ page }: { page: string }): Promise<Browse> {
       sections.push(retrySection(tr("Recommended Podcasts"), "podcasts", picks.reason));
     }
     if (hot.status === "fulfilled") {
+      // The host cannot append Browse pages on scroll; omit pagination until it can.
       if (hot.value.djRadios?.length)
         sections.push({ title: tr("Popular Podcasts"), shows: hot.value.djRadios.map(toShow) });
-      sections.push(
-        ...nextSection(
-          name,
-          { offset: offset + PAGE },
-          hot.value.hasMore && hot.value.djRadios?.length,
-        ),
-      );
     } else
       sections.push(
         retrySection(tr("Popular Podcasts"), route("podcasts", { offset }), hot.reason),
