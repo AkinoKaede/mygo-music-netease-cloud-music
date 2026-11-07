@@ -342,7 +342,7 @@ test("manifest loads a portable entry with only required network permissions", a
   const manifest = JSON.parse(await readFile(new URL("../plugin.json", import.meta.url)));
   const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url)));
   assert.equal(manifest.version, pkg.version);
-  assert.equal(manifest.minAppVersion, "0.1.19");
+  assert.equal(manifest.minAppVersion, "0.1.20");
   assert.deepEqual(manifest.permissions.network, ["music.163.com", "interfacepc.music.163.com"]);
   assert.equal(manifest.permissions.process, undefined);
   assert.equal(manifest.main, "index.js");
