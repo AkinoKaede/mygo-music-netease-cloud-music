@@ -13,10 +13,23 @@ export function tr(text: string, values?: Record<string, unknown>) {
   );
 }
 
-export function fail(code: string, message: string) {
-  const error = Object.assign(new Error(message), { code });
+export interface Failure extends Error {
+  code: string;
+  // transient says the source refused this request itself, rather than the
+  // song: asking again, later, may do.
+  transient?: boolean;
+}
+
+export function fail(code: string, message: string, transient = false): Failure {
+  const error = new Error(message) as Failure;
+  error.code = code;
+  if (transient) error.transient = true;
   return error;
 }
+
+// NetEase answers -460 when it thinks the network looks risky, for that
+// request only: the same song answers on the next one.
+const refusals = new Set([-460]);
 
 export function check<T extends ApiStatus>(data: T, path: string, allowed = [200]): T {
   if (!allowed.includes(Number(data?.code))) {
@@ -28,9 +41,14 @@ export function check<T extends ApiStatus>(data: T, path: string, allowed = [200
         message: data?.message || data?.msg || tr("Request failed"),
         code,
       }),
+      refusals.has(code),
     );
   }
   return data;
+}
+
+export function transient(error: unknown) {
+  return (error as Failure | null)?.transient === true;
 }
 
 export function id(value: unknown) {

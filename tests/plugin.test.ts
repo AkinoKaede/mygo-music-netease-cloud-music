@@ -279,6 +279,75 @@ test("new stream formats still reject previews, unsafe URLs and unsupported type
   await assert.rejects(h.plugin.stream({ id: "1" }), { code: "unsupported" });
 });
 
+// -460 is NetEase refusing the request itself, not the song: the next one may do.
+test("a stream request refused once is asked again and plays", async () => {
+  let tries = 0;
+  const h = await harness(({ path }) => {
+    assert.equal(path, "/api/song/enhance/player/url/v1");
+    if (++tries === 1) return { code: -460, message: "risky network" };
+    return { data: [{ id: 1, url: "https://audio.example/a.mp3", type: "mp3" }] };
+  });
+  const result = await h.plugin.stream({ id: "1" });
+  assert.equal(result.url, "https://audio.example/a.mp3");
+  assert.equal(tries, 2);
+});
+
+test("a lasting refusal falls back to the older stream endpoint", async () => {
+  const calls = { v1: 0, older: 0 };
+  const h = await harness(
+    ({ path, params }) => {
+      if (path === "/api/song/enhance/player/url/v1") {
+        calls.v1++;
+        return { code: -460, message: "risky network" };
+      }
+      calls.older++;
+      assert.equal(path, "/api/song/enhance/player/url");
+      assert.equal(params.br, 320000);
+      return {
+        data: [{ id: 1, url: "https://audio.example/a.mp3", type: "mp3", level: "exhigh" }],
+      };
+    },
+    { settings: { quality: "exhigh" } },
+  );
+  const result = await h.plugin.stream({ id: "1" });
+  assert.equal(result.url, "https://audio.example/a.mp3");
+  assert.equal(result.quality, "exhigh");
+  assert.deepEqual(calls, { v1: 3, older: 1 });
+});
+
+// -460 is a risk check on the request: asks stay few, spaced out, and the
+// older endpoint is only a last resort, so retrying does not read as a burst.
+test("retries stay bounded when both endpoints refuse", async () => {
+  const calls = { v1: 0, older: 0 };
+  const h = await harness(({ path }) => {
+    if (path === "/api/song/enhance/player/url/v1") calls.v1++;
+    else calls.older++;
+    return { code: -460, message: "risky network" };
+  });
+  await assert.rejects(h.plugin.stream({ id: "1" }), /-460/);
+  assert.deepEqual(calls, { v1: 3, older: 2 });
+});
+
+test("a song the service cannot stream is not asked again", async () => {
+  let calls = 0;
+  const h = await harness(() => {
+    calls++;
+    return { data: [] };
+  });
+  await assert.rejects(h.plugin.stream({ id: "1" }), { code: "unavailable" });
+  assert.equal(calls, 1);
+});
+
+test("an error the service names is not retried", async () => {
+  let calls = 0;
+  const h = await harness(() => {
+    calls++;
+    return { code: 400, message: "参数错误" };
+  });
+  await assert.rejects(h.plugin.stream({ id: "1" }), /400/);
+  assert.equal(calls, 1);
+});
+
 // Word timestamps are absolute milliseconds; translation alignment tolerates small timing differences.
 test("YRC retains word timing, parentheses and nearby translations", async () => {
   const h = await harness(({ path }) =>

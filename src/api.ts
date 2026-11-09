@@ -5,7 +5,7 @@ import { EAPI, EAPI_KEY, EAPI_UA, SITE, UA } from "./constants.js";
 import type { ApiStatus } from "./service-types.js";
 import { cookieHeader, load, save, session, storeCookies } from "./session.js";
 import type { Params } from "./types.js";
-import { check, tr } from "./utils.js";
+import { check, fail, transient, tr } from "./utils.js";
 
 export async function request<T extends ApiStatus>(
   url: string,
@@ -17,12 +17,41 @@ export async function request<T extends ApiStatus>(
   try {
     const response = await fetch(url, { ...options, signal: controller.signal, redirect: "error" });
     if (!response.ok)
-      throw new Error(tr("NetEase request failed (HTTP {status})", { status: response.status }));
+      throw fail(
+        "",
+        tr("NetEase request failed (HTTP {status})", { status: response.status }),
+        response.status === 429 || response.status >= 500,
+      );
     const result = (await response.json()) as T;
     storeCookies(response.headers, generation);
     return result;
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+// retry asks again when the source refused the request itself rather than the
+// song, as a risk check can make it do now and then: the refusal is spent, so
+// the next request may do. It is bounded and slowed down on purpose, so a
+// refusal is not met with a burst, and a source that cannot play the song, or
+// wants something first, is not asked again.
+export async function retry<T>(
+  run: (attempt: number) => Promise<T>,
+  attempts = 3,
+  label = "",
+): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await run(attempt);
+    } catch (error) {
+      if (!transient(error)) throw error;
+      const text = error instanceof Error ? error.message : String(error);
+      if (attempt >= attempts) {
+        console.log(`${label || "NetEase"}: ${text}; giving up`);
+        throw error;
+      }
+      await new Promise((done) => setTimeout(done, attempt * 300 + Math.random() * 200));
+    }
   }
 }
 
