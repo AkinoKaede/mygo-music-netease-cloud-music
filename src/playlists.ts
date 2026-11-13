@@ -132,7 +132,7 @@ export async function isLiked({ ids }: { ids: string[] }) {
 export async function like({ id: song, on }: Toggle) {
   const me = requireAccount();
   if (trackIdentity(song).program) return likeEpisode({ id: song, on });
-  // Use the account's song-like operation; radio/like is Personal FM feedback.
+  // Match the EAPI song-heart contract with the signed-in user and a boolean state.
   await eapi("/api/song/like", {
     trackId: id(song),
     userid: me.id,
