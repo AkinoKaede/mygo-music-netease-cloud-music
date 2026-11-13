@@ -10,6 +10,7 @@ export const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 export const pluginFiles = [
   "LICENSE",
   "README.md",
+  "THIRD_PARTY_NOTICES.md",
   "index.js",
   "locales/zh-CN.json",
   "plugin.json",

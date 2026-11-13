@@ -2,14 +2,27 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import assert from "node:assert/strict";
-import { createCipheriv, createDecipheriv, createHash, randomUUID } from "node:crypto";
+import {
+  constants,
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  publicEncrypt,
+  randomUUID,
+} from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type * as Plugin from "../src/index.js";
 import type { ServiceSong } from "../src/service-types.js";
 import type { Host, ID, StorageSchema } from "../src/types.js";
-import { EAPI_KEY } from "./fixtures/protocol.ts";
+import {
+  EAPI_KEY,
+  WEAPI_ALPHABET,
+  WEAPI_IV,
+  WEAPI_KEY,
+  WEAPI_PUBLIC_KEY,
+} from "./fixtures/protocol.ts";
 
 export const pluginDirectory = resolve(
   process.env.PLUGIN_DIR || fileURLToPath(new URL("../dist/plugin", import.meta.url)),
@@ -55,7 +68,13 @@ export async function harness(
   }
   const calls: Call[] = [],
     prompts: Parameters<Host["signInPrompt"]>[0][] = [];
+  const randoms: number[] = [];
   const host = {
+    random: () => {
+      const value = Math.random();
+      randoms.push(value);
+      return value;
+    },
     storage: {
       get: (k: string) => structuredClone(state.get(k)),
       set: (k: string, v: unknown) => {
@@ -103,6 +122,35 @@ export async function harness(
         assert.equal(params.e_r, false);
         assert.equal((params.header as { deviceId: string }).deviceId.length, 52);
       }
+      if (path.startsWith("/weapi/")) {
+        // Recover this VM's per-request key and verify the wire format with Node crypto.
+        const key = randoms
+          .slice(-16)
+          .map((n) => WEAPI_ALPHABET[Math.floor(n * WEAPI_ALPHABET.length)])
+          .join("");
+        const padded = Buffer.alloc(128);
+        Buffer.from(key).reverse().copy(padded, 112);
+        assert.equal(
+          params.encSecKey,
+          publicEncrypt(
+            { key: WEAPI_PUBLIC_KEY, padding: constants.RSA_NO_PADDING },
+            padded,
+          ).toString("hex"),
+        );
+        const decrypt = (text: string, secret: string) => {
+          const decipher = createDecipheriv(
+            "aes-128-cbc",
+            Buffer.from(secret),
+            Buffer.from(WEAPI_IV),
+          );
+          return Buffer.concat([
+            decipher.update(Buffer.from(text, "base64")),
+            decipher.final(),
+          ]).toString();
+        };
+        params = JSON.parse(decrypt(decrypt(String(params.params), key), WEAPI_KEY));
+        path = path.replace("/weapi/", "/api/");
+      }
       const call = { path, params, options, url };
       calls.push(call);
       const result = await handler(call);
@@ -110,11 +158,12 @@ export async function harness(
       assert.notEqual(result, undefined, `Unmocked request: ${path}`);
       return Response.json({ code: 200, ...result });
     },
-  } satisfies Host & { timer: unknown; fetch: unknown };
+  } satisfies Host & { timer: unknown; fetch: unknown; random: unknown };
   const globalKey = `__netease_test_${randomUUID().replaceAll("-", "")}`;
   const globals = globalThis as unknown as Record<string, unknown>;
   globals[globalKey] = host;
-  const prefix = `const host = globalThis.${globalKey}; const fetch = host.fetch; const setTimeout = host.timer;\n`;
+  const prefix = `const host = globalThis.${globalKey}; const fetch = host.fetch; const setTimeout = host.timer;
+const Math = Object.create(globalThis.Math); Math.random = host.random;\n`;
   let plugin: typeof Plugin;
   try {
     plugin = (await import(

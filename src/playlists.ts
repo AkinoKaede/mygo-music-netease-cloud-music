@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Kaede Akino
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { eapi, web } from "./api.js";
+import { eapi, web, weapi } from "./api.js";
 import { PAGE } from "./constants.js";
 import { toPlaylist, toTrack, trackIdentity } from "./models.js";
 import type { ServicePlaylist } from "./service-types.js";
@@ -130,13 +130,14 @@ export async function isLiked({ ids }: { ids: string[] }) {
 }
 
 export async function like({ id: song, on }: Toggle) {
-  const me = requireAccount();
+  requireAccount();
   if (trackIdentity(song).program) return likeEpisode({ id: song, on });
-  // Match the EAPI song-heart contract with the signed-in user and a boolean state.
-  await eapi("/api/song/like", {
-    trackId: id(song),
-    userid: me.id,
+  // Song hearts use the browser's authenticated WEAPI contract, including JSON types.
+  await weapi("/api/radio/like", {
+    alg: "itembased",
+    trackId: Number(id(song)),
     like: !!on,
+    time: 3,
   });
   session.likesRevision++;
   session.likedCache = null;

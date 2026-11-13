@@ -396,19 +396,29 @@ test("hot comments do not alter the host comment offset", async () => {
   assert.equal(result.more, true);
 });
 
-// Song hearts use the account's song-like API, including when removing a heart.
-test("song hearts update the account's liked songs and refresh cached state", async () => {
+// Both heart states must use the authenticated browser protocol and correct JSON types.
+test("song hearts use authenticated WEAPI and refresh cached state", async () => {
   let liked = false;
   const h = await harness(
     ({ path, params, url, options }) => {
       if (path === "/api/song/like/get") return { ids: liked ? [1] : [] };
-      assert.equal(path, "/api/song/like");
-      assert.equal(url.pathname, "/eapi/song/like");
+      assert.equal(path, "/api/radio/like");
+      assert.equal(url.origin, "https://music.163.com");
+      assert.equal(url.pathname, "/weapi/radio/like");
+      assert.equal(url.searchParams.get("csrf_token"), "test-csrf");
       assert.equal(options.method, "POST");
-      assert.equal(params.trackId, "1");
-      assert.equal(params.userid, "7");
-      assert.equal(typeof params.like, "boolean");
-      assert.equal((params.header as { MUSIC_U: string }).MUSIC_U, "test-session");
+      assert.deepEqual(params, {
+        alg: "itembased",
+        trackId: 1,
+        like: !liked,
+        time: 3,
+        csrf_token: "test-csrf",
+      });
+      assert.match(options.headers.Cookie, /os=pc; appver=2\.7\.1\.198277;/);
+      assert.match(options.headers.Cookie, /MUSIC_U=test-session/);
+      assert.match(options.headers.Cookie, /__csrf=test-csrf/);
+      assert.match(options.headers["User-Agent"], /X11; Linux x86_64/);
+      assert.equal(options.headers.Referer, "https://music.163.com/");
       liked = params.like as boolean;
       return {};
     },
@@ -432,7 +442,7 @@ test("like invalidates an older in-flight liked list", async () => {
   });
   const h = await harness(
     async ({ path }) => {
-      if (path === "/api/song/like") return {};
+      if (path === "/api/radio/like") return {};
       if (++reads === 1) {
         started();
         await new Promise<void>((resolve) => {

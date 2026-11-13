@@ -6,6 +6,7 @@ import type { ApiStatus } from "./service-types.js";
 import { cookieHeader, load, save, session, storeCookies } from "./session.js";
 import type { Params } from "./types.js";
 import { check, fail, transient, tr } from "./utils.js";
+import { encodeWeapi } from "./weapi.js";
 
 export async function request<T extends ApiStatus>(
   url: string,
@@ -78,6 +79,28 @@ export async function web<T = object>(
       ...(method === "POST" ? { body: query } : {}),
     },
     options.generation ?? session.epoch,
+  );
+  return check(result, path);
+}
+
+export async function weapi<T = object>(path: string, data: Params) {
+  const cookies = load("cookies", {});
+  const csrf = cookies.__csrf || "";
+  const result = await request<ApiStatus & T>(
+    `${SITE}${path.replace(/^\/api\//, "/weapi/")}?csrf_token=${encodeURIComponent(csrf)}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent":
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Referer: `${SITE}/`,
+        Cookie: `os=pc; appver=2.7.1.198277; ${cookieHeader(cookies)}`,
+        Accept: "*/*",
+        "Accept-Language": "en-US,en;q=0.5",
+      },
+      body: new URLSearchParams(encodeWeapi({ ...data, csrf_token: csrf })).toString(),
+    },
   );
   return check(result, path);
 }
