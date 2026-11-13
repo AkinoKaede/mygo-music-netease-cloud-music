@@ -396,6 +396,33 @@ test("hot comments do not alter the host comment offset", async () => {
   assert.equal(result.more, true);
 });
 
+// Song hearts use the account's song-like API, including when removing a heart.
+test("song hearts update the account's liked songs and refresh cached state", async () => {
+  let liked = false;
+  const h = await harness(
+    ({ path, params, url, options }) => {
+      if (path === "/api/song/like/get") return { ids: liked ? [1] : [] };
+      assert.equal(path, "/api/song/like");
+      assert.equal(url.pathname, "/eapi/song/like");
+      assert.equal(options.method, "POST");
+      assert.equal(params.trackId, "1");
+      assert.equal(params.userid, "7");
+      assert.equal(typeof params.like, "boolean");
+      assert.equal((params.header as { MUSIC_U: string }).MUSIC_U, "test-session");
+      liked = params.like as boolean;
+      return {};
+    },
+    { signedIn: true },
+  );
+  assert.deepEqual(await h.plugin.isLiked({ ids: ["1"] }), { 1: false });
+  for (const on of [true, false]) {
+    await h.plugin.like({ id: "1", on });
+    assert.equal(liked, on);
+    assert.deepEqual(await h.plugin.isLiked({ ids: ["1"] }), { 1: on });
+  }
+  assert.equal(h.calls.filter((c) => c.path === "/api/song/like/get").length, 3);
+});
+
 // An in-flight old like list must not overwrite the cache after a successful like.
 test("like invalidates an older in-flight liked list", async () => {
   let release!: () => void, started!: () => void;
@@ -405,7 +432,7 @@ test("like invalidates an older in-flight liked list", async () => {
   });
   const h = await harness(
     async ({ path }) => {
-      if (path === "/api/radio/like") return {};
+      if (path === "/api/song/like") return {};
       if (++reads === 1) {
         started();
         await new Promise<void>((resolve) => {

@@ -130,13 +130,13 @@ export async function isLiked({ ids }: { ids: string[] }) {
 }
 
 export async function like({ id: song, on }: Toggle) {
-  requireAccount();
+  const me = requireAccount();
   if (trackIdentity(song).program) return likeEpisode({ id: song, on });
-  await eapi("/api/radio/like", {
-    alg: "itembased",
+  // Use the account's song-like operation; radio/like is Personal FM feedback.
+  await eapi("/api/song/like", {
     trackId: id(song),
-    like: String(!!on),
-    time: "3",
+    userid: me.id,
+    like: !!on,
   });
   session.likesRevision++;
   session.likedCache = null;
