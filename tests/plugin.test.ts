@@ -396,6 +396,43 @@ test("hot comments do not alter the host comment offset", async () => {
   assert.equal(result.more, true);
 });
 
+// Both heart states must use the authenticated browser protocol and correct JSON types.
+test("song hearts use authenticated WEAPI and refresh cached state", async () => {
+  let liked = false;
+  const h = await harness(
+    ({ path, params, url, options }) => {
+      if (path === "/api/song/like/get") return { ids: liked ? [1] : [] };
+      assert.equal(path, "/api/radio/like");
+      assert.equal(url.origin, "https://music.163.com");
+      assert.equal(url.pathname, "/weapi/radio/like");
+      assert.equal(url.searchParams.get("csrf_token"), "test-csrf");
+      assert.equal(options.method, "POST");
+      assert.deepEqual(params, {
+        alg: "itembased",
+        trackId: 1,
+        like: !liked,
+        time: 3,
+        csrf_token: "test-csrf",
+      });
+      assert.match(options.headers.Cookie, /os=pc; appver=2\.7\.1\.198277;/);
+      assert.match(options.headers.Cookie, /MUSIC_U=test-session/);
+      assert.match(options.headers.Cookie, /__csrf=test-csrf/);
+      assert.match(options.headers["User-Agent"], /X11; Linux x86_64/);
+      assert.equal(options.headers.Referer, "https://music.163.com/");
+      liked = params.like as boolean;
+      return {};
+    },
+    { signedIn: true },
+  );
+  assert.deepEqual(await h.plugin.isLiked({ ids: ["1"] }), { 1: false });
+  for (const on of [true, false]) {
+    await h.plugin.like({ id: "1", on });
+    assert.equal(liked, on);
+    assert.deepEqual(await h.plugin.isLiked({ ids: ["1"] }), { 1: on });
+  }
+  assert.equal(h.calls.filter((c) => c.path === "/api/song/like/get").length, 3);
+});
+
 // An in-flight old like list must not overwrite the cache after a successful like.
 test("like invalidates an older in-flight liked list", async () => {
   let release!: () => void, started!: () => void;

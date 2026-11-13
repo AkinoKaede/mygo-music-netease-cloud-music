@@ -51,7 +51,12 @@ test("bundle is standalone, preserves exports, metadata, locales and permissions
     await readFile(resolve(root, "tests/fixtures/exports.json"), "utf8"),
   );
   assert.deepEqual(outputs[0].exports.toSorted(), expected);
-  assert.ok(Object.keys(meta.inputs).every((file) => file.startsWith("src/")));
+  // The only bundled dependency supplies host-compatible AES-CBC for WEAPI.
+  assert.ok(
+    Object.keys(meta.inputs).every(
+      (file) => file.startsWith("src/") || file.includes("node_modules/@noble/ciphers/"),
+    ),
+  );
   for (const name of ["plugin.json", "locales/zh-CN.json", "LICENSE"]) {
     assert.deepEqual(
       await readFile(resolve(root, "dist/plugin", name)),
