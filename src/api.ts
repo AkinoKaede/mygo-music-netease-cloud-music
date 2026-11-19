@@ -83,7 +83,7 @@ export async function web<T = object>(
   return check(result, path);
 }
 
-export async function weapi<T = object>(path: string, data: Params) {
+export async function weapi<T = object>(path: string, data: Params, allowed = [200]) {
   const cookies = load("cookies", {});
   const csrf = cookies.__csrf || "";
   const result = await request<ApiStatus & T>(
@@ -102,7 +102,7 @@ export async function weapi<T = object>(path: string, data: Params) {
       body: new URLSearchParams(encodeWeapi({ ...data, csrf_token: csrf })).toString(),
     },
   );
-  return check(result, path);
+  return check(result, path, allowed);
 }
 
 export function deviceID() {

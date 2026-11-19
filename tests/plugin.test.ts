@@ -121,18 +121,29 @@ test("playlist fetches every ID in bounded batches", async () => {
   );
 });
 
-// Reordering uses update, while the documented 512 retry applies only to add/remove.
-test("playlist editing retries 512 and submits a complete reorder", async () => {
-  let adds = 0;
+// EAPI additions returned success but disappeared later. Both normal writes and
+// their 512 fallback must use authenticated WEAPI; reorder keeps its own contract.
+test("playlist add/remove use WEAPI, retry 512 and preserve complete reorders", async () => {
+  const attempts: Record<string, number> = { add: 0, del: 0 };
   const h = await harness(
-    ({ path, params }) => {
+    ({ path, params, url, options }) => {
       if (path === "/api/v6/playlist/detail")
         return { playlist: { id: 9, trackCount: 3, trackIds: [1, 2, 3].map((id) => ({ id })) } };
       if (path === "/api/playlist/manipulate/tracks") {
-        if (params.op === "add") {
-          assert.deepEqual(JSON.parse(String(params.trackIds)), adds ? [1, 2, 1, 2] : [1, 2]);
-          return { code: ++adds === 1 ? 512 : 200 };
+        if (params.op === "add" || params.op === "del") {
+          assert.equal(url.origin, "https://music.163.com");
+          assert.equal(url.pathname, "/weapi/playlist/manipulate/tracks");
+          assert.equal(url.searchParams.get("csrf_token"), "test-csrf");
+          assert.match(options.headers.Cookie, /MUSIC_U=test-session/);
+          assert.equal(params.csrf_token, "test-csrf");
+          assert.equal(params.pid, "9");
+          assert.deepEqual(
+            JSON.parse(String(params.trackIds)),
+            attempts[params.op] ? [1, 2, 1, 2] : [1, 2],
+          );
+          return { code: ++attempts[params.op] === 1 ? 512 : 200 };
         }
+        assert.equal(url.pathname, "/eapi/playlist/manipulate/tracks");
         assert.equal(params.op, "update");
         assert.deepEqual(JSON.parse(String(params.trackIds)), [2, 3, 1]);
         return {};
@@ -141,6 +152,8 @@ test("playlist editing retries 512 and submits a complete reorder", async () => 
     { signedIn: true },
   );
   await h.plugin.addToPlaylist({ id: "9", trackIds: ["1", "2"] });
+  await h.plugin.removeFromPlaylist({ id: "9", trackIds: ["1", "2"] });
+  assert.deepEqual(attempts, { add: 2, del: 2 });
   await h.plugin.movePlaylistTrack({ id: "9", from: 0, to: 2 });
   await assert.rejects(
     h.plugin.movePlaylistTrack({ id: "9", from: 9, to: 0 }),

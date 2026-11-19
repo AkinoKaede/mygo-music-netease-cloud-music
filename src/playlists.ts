@@ -180,8 +180,10 @@ export async function manipulate(op: string, pid: string, trackIds: string[]) {
   const ids = trackIds.map((n) => Number(id(n)));
   if (!ids.length) return;
   await editablePlaylist(pid);
+  // Use the browser write operation: EAPI additions returned 200 but could
+  // disappear from the remote playlist after a later refresh.
   const send = (items: number[]) =>
-    eapi(
+    weapi(
       "/api/playlist/manipulate/tracks",
       { op, pid: id(pid), trackIds: JSON.stringify(items), imme: "true" },
       [200, 502, 512],
